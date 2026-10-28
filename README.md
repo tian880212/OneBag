@@ -15,7 +15,9 @@
 
 1. 解压后目录名必须是 **`OneBag`**（与 `OneBag.toc` 同级）
 2. 整个目录放进 `Interface\AddOns\`
-3. **需要公共库 `!Libs`**（`OneBag.toc` 里 `Dependencies: !Libs`）。本仓库**不含**该库
+3. **需要公共库 `!Libs`**（`OneBag.toc` 里 `Dependencies: !Libs`）。本仓库**不含**该库。
+   配套打包好的版本：[tian880212/Libs](https://github.com/tian880212/Libs)
+   （解压后目录名必须带感叹号：`!Libs`）
 4. 进游戏按背包键（`B`）或点击小地图按钮打开
 
 ## 常用命令
