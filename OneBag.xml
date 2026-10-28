@@ -1,0 +1,1146 @@
+<Ui xmlns="http://www.blizzard.com/wow/ui/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.blizzard.com/wow/ui/FrameXML\UI.xsd">
+   
+   <Button name="OneBankItemButtonTemplate" inherits="BankItemButtonGenericTemplate" virtual="true">
+    	<Scripts>
+    		<OnLoad>
+				BankFrameItemButton_OnLoad()
+				this:SetNormalTexture("Interface\\AddOns\\OneBag\\media\\BagSlot")
+    		</OnLoad>
+            <OnShow>
+                BankFrameItemButton_OnUpdate()
+            </OnShow>
+    	</Scripts>
+        <Frames>
+            <Model name="$parentCooldown" inherits="CooldownFrameTemplate">
+				<Size x="39" y="39"/>
+				<Anchors>
+					<Anchor point="CENTER">
+						<Offset>
+							<AbsDimension x="0" y="-1"/>
+						</Offset>
+					</Anchor>
+				</Anchors> 
+			</Model>
+        </Frames>
+    </Button>
+   
+   <Button name="OneBagItemButtonTemplate"  inherits="ContainerFrameItemButtonTemplate" virtual="true">
+    	<Scripts>
+    		<OnLoad>
+    			ContainerFrameItemButton_OnLoad()
+				this:SetNormalTexture("Interface\\AddOns\\OneBag\\media\\BagSlot")
+    		</OnLoad>
+    	</Scripts>
+    </Button> 
+	
+	<CheckButton name="OneBagBagTemplate" inherits="BagSlotButtonTemplate" virtual="true">
+		<Scripts>
+			<OnClick>
+				OneBag:BagSlotButtonClicked(this)
+			</OnClick>
+			<OnReceiveDrag>
+				OneBag:BagSlotButtonClicked(this)
+			</OnReceiveDrag>
+			<OnEnter>
+				OneBag:HighlightBagSlots(this:GetID()-19)
+                BagSlotButton_OnEnter()
+			</OnEnter>
+			<OnLeave>
+				if not this:GetChecked() then
+					OneBag:UnhighlightBagSlots(this:GetID()-19)
+					if OneBag.frame.bags[this:GetID()-19] then
+						OneBag.frame.bags[this:GetID()-19].colorLocked = false
+					end
+				else
+					if OneBag.frame.bags[this:GetID()-19] then
+						OneBag.frame.bags[this:GetID()-19].colorLocked = true
+					end
+				end
+                this.updateTooltip = nil
+                GameTooltip:Hide()
+				ResetCursor()
+			</OnLeave>
+		</Scripts>
+	</CheckButton>
+	
+	<CheckButton name="OneBankBagTemplate" inherits="BankItemButtonBagTemplate" virtual="true">
+		<Scripts>
+			<OnClick>
+				OneBank:BankBagSlotButtonClicked(this)
+			</OnClick>
+			<OnReceiveDrag>
+				OneBank:BankBagSlotButtonClicked(this)
+			</OnReceiveDrag>
+			<OnEnter>
+				OneBank:HighlightBagSlots(this:GetID())
+                GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
+                if ( not GameTooltip:SetInventoryItem("player", this:GetInventorySlot()) ) then
+					if ( this.isBag ) then
+						GameTooltip:SetText(this.tooltipText)
+					end
+				end
+				CursorUpdate()
+			</OnEnter>
+			<OnLeave>
+				if not this:GetChecked() and OneBank.frame.bags[this:GetID()] then
+					OneBank:UnhighlightBagSlots(this:GetID())
+					OneBank.frame.bags[this:GetID()].colorLocked = false
+				elseif OneBank.frame.bags[this:GetID()] then
+					OneBank.frame.bags[this:GetID()].colorLocked = true
+				end
+                GameTooltip:Hide()
+				ResetCursor()
+			</OnLeave>
+		</Scripts>
+		<CheckedTexture alphaMode="ADD" file="Interface\Buttons\CheckButtonHilight"/>
+	</CheckButton>
+	
+	<Frame name="OneBagBaseFrameTemplate" virtual="true" toplevel="true" frameStrata="LOW" enableMouse="true" movable="true" hidden="true">
+		<Backdrop bgFile="Interface\ChatFrame\ChatFrameBackground" edgeFile="Interface\Tooltips\UI-Tooltip-Border" tile="true">
+			<BackgroundInsets>
+				<AbsInset left="5" right="5" top="5" bottom="5"/>
+			</BackgroundInsets>
+			<TileSize>
+				<AbsValue val="16"/>
+			</TileSize>
+			<EdgeSize>
+				<AbsValue val="16"/>
+			</EdgeSize>
+		</Backdrop>
+        <Scripts>
+			<OnShow>
+				this.handler:OnBaseShow()
+			</OnShow>
+            <OnHide>
+                this.handler:OnBaseHide()
+            </OnHide>
+		</Scripts>
+	</Frame>
+	
+	<Frame name="OneBagFrameTemplate" inherits="OneBagBaseFrameTemplate"  virtual="true">
+		<Frames>
+			<Button name="$parentCloseButton" inherits="UIPanelCloseButton">
+				<Anchors>
+					<Anchor point="TOPRIGHT" relativeTo="$parent" relativePoint="TOPRIGHT">
+						<Offset>
+							<AbsDimension x="0" y="0"/>
+						</Offset>
+					</Anchor>
+				</Anchors>
+				<Scripts>
+					<OnClick>
+						this:GetParent():Hide()
+					</OnClick>
+				</Scripts>
+			</Button>
+			<Button name="$parentConfigButton">
+				<Anchors>
+					<Anchor point="RIGHT" relativeTo="$parentCloseButton" relativePoint="LEFT">
+						<Offset>
+							<AbsDimension x="-2" y="-8"/>
+						</Offset>
+					</Anchor>
+				</Anchors>
+				<Size>
+					<AbsDimension x="22" y="22"/>
+				</Size>
+				<Scripts>
+					<OnClick>
+						this:GetParent().handler:OpenMenu()
+					</OnClick>
+                    <OnEnter>
+                        GameTooltip:SetOwner(this, "ANCHOR_TOPRIGHT"); 
+                        GameTooltip:SetText(AceLibrary("AceLocale-2.1"):GetInstance("OneBag")["Menu"]);
+                    </OnEnter> 
+                    <OnLeave> GameTooltip:Hide(); </OnLeave> 
+				</Scripts>
+                <NormalTexture file="Interface\AddOns\OneBag\media\Cog.BLP"/>
+                <PushedTexture file="Interface\AddOns\OneBag\media\Cog.BLP"/>
+                <HighlightTexture alphaMode="ADD" file="Interface\AddOns\OneBag\media\Cog.BLP"/>	
+			</Button>
+			<Button name="$parentpackupButton">
+    <Anchors>
+        <Anchor point="RIGHT" relativeTo="$parentConfigButton" relativePoint="LEFT">
+            <Offset>
+                <AbsDimension x="-3" y="0"/>
+            </Offset>
+        </Anchor>
+    </Anchors>
+    <Size>
+        <AbsDimension x="21" y="21"/>
+    </Size>
+    <Scripts>
+        <OnMouseDown>
+            if arg1 == "LeftButton" then
+                Clean_Up("bank")
+            else
+                Clean_Up("bank", 1)
+            end
+        </OnMouseDown>
+        <OnEnter>
+            GameTooltip:SetOwner(this, "ANCHOR_TOPRIGHT"); 
+            GameTooltip:SetText("[左键]:正序|N[右键]:倒序");
+        </OnEnter> 
+        <OnLeave> GameTooltip:Hide(); </OnLeave>
+    </Scripts>
+    <NormalTexture file="Interface\AddOns\OneBag\media\Sorting.BLP"/>
+    <PushedTexture file="Interface\AddOns\OneBag\media\Sorting.BLP">
+        <TexCoords left="0.075" right="0.925" top="0.075" bottom="0.925"/>
+    </PushedTexture>
+    <HighlightTexture alphaMode="ADD" file="Interface\AddOns\OneBag\media\Sorting.BLP">
+        <TexCoords left="0.09" right="0.91" top="0.09" bottom="0.91"/>	
+    </HighlightTexture>
+</Button>			
+			<Button name="$parentBagButton">
+    <Size>
+        <AbsDimension x="20" y="20"/>
+    </Size>
+    <Anchors>
+        <Anchor point="TOPLEFT">
+            <Offset>
+                <AbsDimension x="3" y="-9"/>
+            </Offset>
+        </Anchor>
+    </Anchors>
+    <Scripts>
+        <OnClick>
+            local bagFrame = this:GetParent().bagFrame
+            if bagFrame:IsVisible() then
+                this:SetNormalTexture("Interface\\AddOns\\OneBag\\media\\bags.BLP")
+                this:SetPushedTexture("Interface\\AddOns\\OneBag\\media\\bags.BLP")
+                bagFrame:Hide()
+                -- 侧边栏隐藏时，显示分类标签页
+                if OneBagCategory then
+                    OneBagCategory:UpdateButtons()
+                end
+                if OneBagQuality then
+                    OneBagQuality:UpdateButtons()
+                end
+            else
+                this:SetNormalTexture("Interface\\AddOns\\OneBag\\media\\bags.BLP")
+                this:SetPushedTexture("Interface\\AddOns\\OneBag\\media\\bags.BLP")
+                bagFrame:Show()
+                -- 侧边栏显示时，隐藏分类标签页
+                if OneBagCategory then
+                    OneBagCategory:Hide()
+                end
+            end
+        </OnClick>
+        <OnLoad>
+            getglobal(this:GetParent():GetName() .. "Name"):ClearAllPoints()
+            getglobal(this:GetParent():GetName() .. "Name"):SetPoint("LEFT", this:GetName(), "RIGHT", 5, 1)
+        </OnLoad>
+        <OnEnter>
+            GameTooltip:SetOwner(this, "ANCHOR_TOPRIGHT");
+            GameTooltip:SetText("更换背包");
+        </OnEnter>
+        <OnLeave> GameTooltip:Hide(); </OnLeave>
+    </Scripts>
+    <NormalTexture file="Interface\AddOns\OneBag\media\bags.BLP"/>
+    <PushedTexture file="Interface\AddOns\OneBag\media\bags.BLP"/>
+    <HighlightTexture file="Interface\AddOns\OneBag\media\bags.BLP" alphaMode="ADD"/>
+</Button>			<Frame name="$parentMoneyFrame" inherits="SmallMoneyFrameTemplate">
+				<Size>
+					<AbsDimension x="206" y="14"/>
+				</Size>
+				<Anchors>
+					<Anchor point="BOTTOMRIGHT" relativeTo="$parent" relativePoint="BOTTOMRIGHT">
+						<Offset>
+							<AbsDimension x="0" y="8"/>
+						</Offset>
+					</Anchor>
+				</Anchors>
+			</Frame>
+		</Frames>
+		<Layers>
+			<Layer level="ARTWORK">
+				<FontString name="$parentName" inherits="GameFontNormal" justifyH="LEFT">
+					<Anchors>
+						<Anchor point="LEFT" relativeTo="$parentBagButton" relativePoint="RIGHT">
+							<Offset>
+								<AbsDimension x="5" y="1"/>
+							</Offset>
+						</Anchor>
+					</Anchors>
+				</FontString>
+				<!-- 底部信息区：Info1-4 字体缩到 GameFontNormalSmall（约 10pt），GameFontNormal 的 12pt 在小窗口里偏拥挤 -->
+				<FontString name="$parentInfo1" inherits="GameFontNormalSmall" justifyH="LEFT">
+					<Anchors>
+						<Anchor point="BOTTOMLEFT">
+							<Offset>
+								<AbsDimension x="8" y="9"/>
+							</Offset>
+						</Anchor>
+					</Anchors>
+				</FontString>
+				<FontString name="$parentInfo2" inherits="GameFontNormalSmall" justifyH="LEFT">
+					<Anchors>
+						<Anchor point="TOPLEFT" relativeTo="$parentInfo1" relativePoint="TOPRIGHT">
+							<Offset>
+								<AbsDimension x="5" y="0"/>
+							</Offset>
+						</Anchor>
+					</Anchors>
+				</FontString>
+				<FontString name="$parentInfo3" inherits="GameFontNormalSmall" justifyH="LEFT">
+					<Anchors>
+						<Anchor point="TOPLEFT" relativeTo="$parentInfo2" relativePoint="TOPRIGHT">
+							<Offset>
+								<AbsDimension x="5" y="0"/>
+							</Offset>
+						</Anchor>
+					</Anchors>
+				</FontString>
+				<FontString name="$parentInfo4" inherits="GameFontNormalSmall" justifyH="LEFT">
+					<Anchors>
+						<Anchor point="TOPLEFT" relativeTo="$parentInfo3" relativePoint="TOPRIGHT">
+							<Offset>
+								<AbsDimension x="5" y="0"/>
+							</Offset>
+						</Anchor>
+					</Anchors>
+				</FontString>
+			</Layer>
+		</Layers>
+		<Scripts>
+			<OnLoad>
+				tinsert(UISpecialFrames,this:GetName())
+                this:RegisterForDrag("LeftButton")
+            </OnLoad>
+            <OnDragStart>
+                if not this.handler.db.profile.locked then
+                    this.isMoving = true
+                    -- 暂停后台缓存预热队列，避免其占用每帧预算拖慢拖拽帧率（参考 Guda）
+                    if OneBag_PauseWorkQueue then OneBag_PauseWorkQueue() end
+                    -- 隐藏全部物品按钮：原生 StartMoving 会逐帧重绘所有子区域，
+                    -- 背包/银行多达数百个按钮（每个含贴图与字体），隐藏后拖动时
+                    -- 只重绘框架外壳，帧率恢复正常（参考 Guda 的 HideItemButtonsForDrag）。
+                    this._dragShown = {}
+                    for bag = -1, 10 do
+                        if this.bags[bag] then
+                            for slot = 1, this.bags[bag].size do                        
+                                local btn = this.bags[bag][slot]
+                                if btn then
+                                    if btn:IsShown() then
+                                        this._dragShown[btn] = true
+                                        btn:Hide()
+                                    end
+                                    btn:EnableMouse(false)
+                                end
+                            end
+                        end
+                    end
+                    this:StartMoving()
+                end
+            </OnDragStart>
+            <OnDragStop>
+                this:StopMovingOrSizing()
+                if this.isMoving then
+                    local point = {}
+                    point.top = this:GetTop()
+                    point.left = this:GetLeft()
+                    point.parent = this:GetParent():GetName()
+                    
+                    this.handler.db.profile.point = point
+
+                    -- 恢复拖动期间隐藏的物品按钮（保持拖动前的可见状态）
+                    if this._dragShown then
+                        for btn in pairs(this._dragShown) do
+                            if btn then btn:Show() end
+                        end
+                        this._dragShown = nil
+                    end
+
+                    for bag = -1, 10 do
+                        if this.bags[bag] then
+                            for slot = 1, this.bags[bag].size do                        
+                                if this.bags[bag][slot] then
+                                    this.bags[bag][slot]:EnableMouse(true)
+                                end
+                            end
+                        end
+                    end
+                    
+                end
+                this.isMoving = false
+                -- 拖动结束后刷新一次，确保若拖动期间发生背包变化也能正确显示
+                if this.handler and this.handler.fBags then
+                    for _, b in ipairs(this.handler.fBags) do
+                        pcall(function() this.handler:UpdateBag(b) end)
+                    end
+                end
+                -- 恢复后台队列（参考 Guda 的 ResumeWorkQueue）
+                if OneBag_ResumeWorkQueue then OneBag_ResumeWorkQueue() end
+            </OnDragStop>
+			<OnHide>
+				this.handler:OnHide()		
+			</OnHide>
+			<OnShow>
+                this.handler:OnShow()
+			</OnShow>
+		</Scripts>
+	</Frame>
+ 
+	<Frame name="OneBagFrame" inherits="OneBagFrameTemplate" parent="UIParent">
+		<Anchors>
+			<Anchor point="TOPLEFT" >
+				<Offset>
+					<AbsDimension x="400" y="-300"/>
+				</Offset>
+			</Anchor>
+		</Anchors>
+		<Frames>
+			<CheckButton name="OneKeyRingButton">
+    <Size x="20" y="20"/>
+    <Anchors>
+        <Anchor point="LEFT" relativeTo="$parentBagButton" relativePoint="RIGHT">
+            <Offset>
+                <AbsDimension x="0" y="0"/>
+            </Offset>
+        </Anchor>
+    </Anchors>
+    <Frames>
+        <Model name="$parentItemAnim" inherits="ItemAnimTemplate">
+            <Anchors>
+                <Anchor point="BOTTOMRIGHT">
+                    <Offset>
+                        <AbsDimension x="0" y="0"/>
+                    </Offset>
+                </Anchor>
+            </Anchors>
+        </Model>
+    </Frames>
+    <Scripts>
+        <OnLoad>
+            this:SetID(KEYRING_CONTAINER);
+            local name = getglobal(this:GetParent():GetName().."Name")
+            name:ClearAllPoints()
+            name:SetPoint("LEFT", this:GetName(), "RIGHT", 5, 1)
+        </OnLoad>
+        <OnClick>
+            OneBag:OnKeyRingButtonClick()
+        </OnClick>
+        <OnReceiveDrag>
+            if (CursorHasItem()) then
+                PutKeyInKeyRing();
+            end
+        </OnReceiveDrag>
+        <OnEnter>
+            GameTooltip:SetOwner(this, "ANCHOR_RIGHT");
+            GameTooltip:SetText(KEYRING, HIGHLIGHT_FONT_COLOR.r, HIGHLIGHT_FONT_COLOR.g, HIGHLIGHT_FONT_COLOR.b);
+            GameTooltip:AddLine();
+        </OnEnter>
+        <OnLeave>
+            GameTooltip:Hide();
+        </OnLeave>
+    </Scripts>
+    <NormalTexture file="Interface\AddOns\OneBag\media\keyring.BLP"/>
+    <HighlightTexture file="Interface\AddOns\OneBag\media\keyring.BLP" alphaMode="ADD"/>
+    <PushedTexture file="Interface\AddOns\OneBag\media\keyring.BLP"/>
+</CheckButton>		</Frames>
+	</Frame>
+	
+	<Frame name="OBBagFram" inherits="OneBagBaseFrameTemplate" parent="UIParent">
+		<Size>
+			<AbsDimension x="60" y="223"/>
+		</Size>
+		<Anchors>
+			<Anchor point="TOPRIGHT" relativeTo="OneBagFrame" relativePoint="TOPLEFT">
+				<Offset>
+					<AbsDimension x="5" y="0"/>
+				</Offset>
+			</Anchor>
+		</Anchors>
+		<Frames>
+			<CheckButton name="$parentBackpackButton" inherits="OneBagBagTemplate" id="0">
+				<Size>
+					<AbsDimension x="37" y="37"/>
+				</Size>
+				<Anchors>
+					<Anchor point="TOP">
+						<Offset>
+							<AbsDimension x="0" y="-15"/>
+						</Offset>
+					</Anchor>
+				</Anchors>
+				<Frames>
+					<Model name="$parentItemAnim" inherits="ItemAnimTemplate">
+						<Anchors>
+							<Anchor point="BOTTOMRIGHT">
+								<Offset>
+									<AbsDimension x="-10" y="0"/>
+								</Offset>
+							</Anchor>
+						</Anchors>
+					</Model>
+				</Frames>
+				<Scripts>
+					<OnClick>
+						PlaySound("BAGMENUBUTTONPRESS")
+						
+						PutItemInBackpack()
+						
+						if not this:GetChecked() then
+							OneBag:UnhighlightBagSlots(0)
+							OneBag.frame.bags[0].colorLocked = false
+						else
+							OneBag.frame.bags[0].colorLocked = true
+						end
+						OneBag:OrganizeFrame(true)
+					</OnClick>
+					<OnLoad>
+						this:RegisterForClicks("LeftButtonUp", "RightButtonUp");
+						getglobal(this:GetName().."IconTexture"):SetTexture("Interface\\Buttons\\Button-Backpack-Up");
+					</OnLoad>
+					<OnReceiveDrag>
+						BackpackButton_OnClick();
+					</OnReceiveDrag>
+					<OnEnter>
+						OneBag:HighlightBagSlots(0)
+					</OnEnter>
+					<OnLeave>
+						if not this:GetChecked() then
+							OneBag:UnhighlightBagSlots(0)
+							OneBag.frame.bags[0].colorLocked = false
+						else
+							OneBag.frame.bags[0].colorLocked = true
+						end
+					</OnLeave>
+				</Scripts>
+				<CheckedTexture alphaMode="ADD" file="Interface\Buttons\CheckButtonHilight"/>
+			</CheckButton>
+			<CheckButton name="$parentBag0Slot" inherits="OneBagBagTemplate" id="20">
+				<Anchors>
+					<Anchor point="TOP" relativeTo="$parentBackpackButton" relativePoint="BOTTOM">
+						<Offset>
+							<AbsDimension x="0" y="-2"/>
+						</Offset>
+					</Anchor>
+				</Anchors>
+			</CheckButton>
+			<CheckButton name="$parentBag1Slot" inherits="OneBagBagTemplate" id="21">
+				<Anchors>
+					<Anchor point="TOP" relativeTo="$parentBag0Slot" relativePoint="BOTTOM">
+						<Offset>
+							<AbsDimension x="0" y="-2"/>
+						</Offset>
+					</Anchor>
+				</Anchors>
+			</CheckButton>
+			<CheckButton name="$parentBag2Slot" inherits="OneBagBagTemplate" id="22">
+				<Anchors>
+					<Anchor point="TOP" relativeTo="$parentBag1Slot" relativePoint="BOTTOM">
+						<Offset>
+							<AbsDimension x="0" y="-2"/>
+						</Offset>
+					</Anchor>
+				</Anchors>
+			</CheckButton>
+			<CheckButton name="$parentBag3Slot" inherits="OneBagBagTemplate" id="23">
+				<Anchors>
+					<Anchor point="TOP" relativeTo="$parentBag2Slot" relativePoint="BOTTOM">
+						<Offset>
+							<AbsDimension x="0" y="-2"/>
+						</Offset>
+					</Anchor>
+				</Anchors>
+			</CheckButton>
+		</Frames>
+	</Frame>
+	
+	<Frame name="OneBankFrame" inherits="OneBagFrameTemplate" parent="UIParent"/>
+	
+	<Frame name="OBBBagFra" inherits="OneBagBaseFrameTemplate" parent="UIParent">
+		<Size>
+			<AbsDimension x="100" y="190"/>
+		</Size>
+		<Anchors>
+			<Anchor point="TOPRIGHT" relativeTo="OneBankFrame" relativePoint="TOPLEFT">
+				<Offset>
+					<AbsDimension x="5" y="0"/>
+				</Offset>
+			</Anchor>
+		</Anchors>
+		<Frames>
+			<CheckButton name="$parentBag1" inherits="OneBankBagTemplate" id="5">
+				<Anchors>
+					<Anchor point="TOPLEFT">
+						<Offset>
+							<AbsDimension x="13" y="-15"/>
+						</Offset>
+					</Anchor>
+				</Anchors>
+			</CheckButton>
+			<CheckButton name="$parentBag2" inherits="OneBankBagTemplate" id="6">
+				<Anchors>
+					<Anchor point="TOP" relativeTo="$parentBag1" relativePoint="BOTTOM">
+						<Offset>
+							<AbsDimension x="0" y="-2"/>
+						</Offset>
+					</Anchor>
+				</Anchors>
+			</CheckButton>
+			<CheckButton name="$parentBag3" inherits="OneBankBagTemplate" id="7">
+				<Anchors>
+					<Anchor point="TOP" relativeTo="$parentBag2" relativePoint="BOTTOM">
+						<Offset>
+							<AbsDimension x="0" y="-2"/>
+						</Offset>
+					</Anchor>
+				</Anchors>
+			</CheckButton>
+			<CheckButton name="$parentBag4" inherits="OneBankBagTemplate" id="8">
+				<Anchors>
+					<Anchor point="LEFT" relativeTo="$parentBag1" relativePoint="RIGHT">
+						<Offset>
+							<AbsDimension x="1" y="0"/>
+						</Offset>
+					</Anchor>
+				</Anchors>
+			</CheckButton>
+			<CheckButton name="$parentBag5" inherits="OneBankBagTemplate" id="9">
+				<Anchors>
+					<Anchor point="TOP" relativeTo="$parentBag4" relativePoint="BOTTOM">
+						<Offset>
+							<AbsDimension x="0" y="-2"/>
+						</Offset>
+					</Anchor>
+				</Anchors>
+			</CheckButton>
+			<CheckButton name="$parentBag6" inherits="OneBankBagTemplate" id="10">
+				<Anchors>
+					<Anchor point="TOP" relativeTo="$parentBag5" relativePoint="BOTTOM">
+						<Offset>
+							<AbsDimension x="0" y="-2"/>
+						</Offset>
+					</Anchor>
+				</Anchors>
+			</CheckButton>
+			<Frame name="$parentPurchaseInfo" hidden="false">
+				<Layers>
+					<Layer level="BACKGROUND">
+						<FontString name="$parentSlotCost" inherits="GameFontNormal" text="COSTS_LABEL">
+							<Anchors>
+								<Anchor point="TOPLEFT" relativeTo="OBBBagFraBag3" relativePoint="BOTTOMLEFT">
+									<Offset>
+										<AbsDimension x="0" y="-10"/>
+									</Offset>
+								</Anchor>
+							</Anchors>
+						</FontString>
+					</Layer>
+				</Layers>
+				<Frames>
+					<Button name="$parentPurchaseButton" inherits="UIPanelButtonTemplate" virtual="true" text="BANKSLOTPURCHASE">
+						<Size>
+							<AbsDimension x="85" y="21"/>
+						</Size>
+						<Anchors>
+							<Anchor point="TOP" relativeTo="$parentSlotCost" relativePoint="BOTTOM">
+								<Offset>
+									<AbsDimension x="22" y="-7"/>
+								</Offset>
+							</Anchor>
+						</Anchors>
+						<Scripts>
+							<OnClick>
+								PlaySound("igMainMenuOption")
+								StaticPopup_Show("CONFIRM_BUY_BANK_SLOT")
+							</OnClick>
+						</Scripts>
+					</Button>
+					<Frame name="$parentDetailMoneyFrame" inherits="SmallMoneyFrameTemplate" hidden="false">
+						<Anchors>
+							<Anchor point="LEFT" relativeTo="$parentSlotCost" relativePoint="RIGHT">
+								<Offset>
+									<AbsDimension x="5" y="0"/>
+								</Offset>
+							</Anchor>
+						</Anchors>
+						<Scripts>
+							<OnLoad>
+								SmallMoneyFrame_OnLoad();
+								MoneyFrame_SetType("STATIC");
+							</OnLoad>
+						</Scripts>
+					</Frame>
+				</Frames>
+			</Frame>
+		</Frames>
+	</Frame>
+	
+	<Frame name="OneRingFrame" inherits="OneBagFrameTemplate" parent="UIParent"/>
+	
+	<Button name="OneViewItemButtonTemplate"  inherits="ItemButtonTemplate" virtual="true">
+    	<Scripts>
+    		<OnLoad>
+				this:SetNormalTexture("Interface\\AddOns\\OneBag\\media\\BagSlot")
+    		</OnLoad>
+			<OnEnter>
+				if this.itemId then
+					GameTooltip:SetOwner(this, "ANCHOR_RIGHT");
+					GameTooltip:SetHyperlink(this.itemId) 
+				end
+			</OnEnter>
+			<OnLeave>
+				GameTooltip:Hide()
+			</OnLeave>
+			<OnClick>
+				if this.itemId and IsShiftKeyDown() then
+					OneView:LinkItem(this.itemId)
+				end
+			</OnClick>
+    	</Scripts>
+    </Button> 
+	
+	<CheckButton name="OneViewBagButtonTemplate"  inherits="ItemButtonTemplate" virtual="true">
+    	<Scripts>
+			<OnEnter>
+				if this.itemId then
+					GameTooltip:SetOwner(this, "ANCHOR_RIGHT");
+					GameTooltip:SetHyperlink(this.itemId) 
+				end
+				
+				OneView:HighlightBagSlots(this:GetID())
+			</OnEnter>
+			<OnLeave>
+				GameTooltip:Hide()
+				
+				if not this:GetChecked() and OneView.frame.bags[this:GetID()] then
+					OneView:UnhighlightBagSlots(this:GetID())
+					OneView.frame.bags[this:GetID()].colorLocked = false
+				elseif OneView.frame.bags[this:GetID()] then
+					OneView.frame.bags[this:GetID()].colorLocked = true
+				end
+			</OnLeave>
+			<OnLoad>
+				this:SetScale(.85)
+			</OnLoad>
+			<OnClick>
+				PlaySound("BAGMENUBUTTONPRESS")
+				
+				if this.itemId and IsShiftKeyDown() then
+					OneView:LinkItem(this.itemId)
+					this:SetChecked(not this:GetChecked())
+				elseif not this:GetChecked() and OneView.frame.bags[this:GetID()] then
+					OneView:UnhighlightBagSlots(this:GetID())
+					OneView.frame.bags[this:GetID()].colorLocked = false
+				elseif OneView.frame.bags[this:GetID()] then
+					OneView.frame.bags[this:GetID()].colorLocked = true
+				end
+			</OnClick>
+		</Scripts>
+		<CheckedTexture alphaMode="ADD" file="Interface\Buttons\CheckButtonHilight"/>
+    </CheckButton> 
+	
+	<Frame name="OneViewFrame" inherits="OneBagBaseFrameTemplate" parent="UIParent">
+		<Anchors>
+			<Anchor point="TOPLEFT" >
+				<Offset>
+					<AbsDimension x="400" y="-300"/>
+				</Offset>
+			</Anchor>
+		</Anchors>
+		<Scripts>
+			<OnLoad>
+				tinsert(UISpecialFrames,this:GetName())
+				this:RegisterForDrag("LeftButton")
+			</OnLoad>
+			<OnShow>
+				this.handler:LoadCharacter()
+				this.handler:OnBaseShow()
+                this.handler:OnCustomShow()
+			</OnShow>
+            <OnDragStart>
+                if not this.handler.db.profile.locked then
+                    this.isMoving = true
+                    if OneBag_PauseWorkQueue then OneBag_PauseWorkQueue() end
+                    -- 拖动时隐藏全部物品按钮，避免原生 StartMoving 逐帧重绘导致掉帧（参考 Guda）
+                    this._dragShown = {}
+                    for bag = -1, 10 do
+                        if this.bags[bag] then
+                            for slot = 1, this.bags[bag].size do
+                                local btn = this.bags[bag][slot]
+                                if btn then
+                                    if btn:IsShown() then
+                                        this._dragShown[btn] = true
+                                        btn:Hide()
+                                    end
+                                    btn:EnableMouse(false)
+                                end
+                            end
+                        end
+                    end
+                    this:StartMoving()
+                end
+            </OnDragStart>
+            <OnDragStop>
+                this:StopMovingOrSizing()
+                if this.isMoving then
+                    local point = {}
+                    point.top = this:GetTop()
+                    point.left = this:GetLeft()
+                    point.parent = this:GetParent():GetName()
+
+                    this.handler.db.profile.point = point
+
+                    if this._dragShown then
+                        for btn in pairs(this._dragShown) do
+                            if btn then btn:Show() end
+                        end
+                        this._dragShown = nil
+                    end
+
+                    for bag = -1, 10 do
+                        if this.bags[bag] then
+                            for slot = 1, this.bags[bag].size do
+                                if this.bags[bag][slot] then
+                                    this.bags[bag][slot]:EnableMouse(true)
+                                end
+                            end
+                        end
+                    end
+
+                end
+                this.isMoving = false
+                if this.handler and this.handler.fBags then
+                    for _, b in ipairs(this.handler.fBags) do
+                        pcall(function() this.handler:UpdateBag(b) end)
+                    end
+                end
+                if OneBag_ResumeWorkQueue then OneBag_ResumeWorkQueue() end
+            </OnDragStop>
+		</Scripts>
+		<Frames>
+			<Button name="$parentCloseButton" inherits="UIPanelCloseButton">
+				<Anchors>
+					<Anchor point="TOPRIGHT" relativeTo="$parent" relativePoint="TOPRIGHT">
+						<Offset>
+							<AbsDimension x="0" y="0"/>
+						</Offset>
+					</Anchor>
+				</Anchors>
+				<Scripts>
+					<OnClick>
+						this:GetParent():Hide()
+					</OnClick>
+				</Scripts>
+			</Button>
+			<Button name="$parentConfigButton">
+				<Anchors>
+					<Anchor point="RIGHT" relativeTo="$parentCloseButton" relativePoint="LEFT">
+						<Offset>
+							<AbsDimension x="-2" y="-8"/>
+						</Offset>
+					</Anchor>
+				</Anchors>
+				<Size>
+					<AbsDimension x="22" y="22"/>
+				</Size>
+				<Scripts>
+					<OnClick>
+						this:GetParent().handler:OpenMenu()
+					</OnClick>
+					<OnEnter>
+						GameTooltip:SetOwner(this, "ANCHOR_TOPRIGHT");
+						GameTooltip:SetText("设置");
+					</OnEnter>
+					<OnLeave> GameTooltip:Hide(); </OnLeave>
+				</Scripts>
+				<NormalTexture file="Interface\AddOns\OneBag\media\Cog.BLP"/>
+				<PushedTexture file="Interface\AddOns\OneBag\media\Cog.BLP"/>
+				<HighlightTexture alphaMode="ADD" file="Interface\AddOns\OneBag\media\Cog.BLP"/>
+			</Button>
+			<Button name="$parentCharSelectButton">
+				<Anchors>
+					<Anchor point="RIGHT" relativeTo="$parentConfigButton" relativePoint="LEFT">
+						<Offset>
+							<AbsDimension x="-4" y="0"/>
+						</Offset>
+					</Anchor>
+				</Anchors>
+				<Size>
+					<AbsDimension x="20" y="20"/>
+				</Size>
+				<Scripts>
+					<OnClick>
+						this:GetParent().handler:CharSelect()
+					</OnClick>
+					<OnEnter>
+						GameTooltip:SetOwner(this, "ANCHOR_TOPRIGHT");
+						GameTooltip:SetText("角色选择");
+					</OnEnter>
+					<OnLeave> GameTooltip:Hide(); </OnLeave>
+				</Scripts>
+				<NormalTexture file="Interface\AddOns\OneBag\media\Chest.BLP"/>
+				<PushedTexture file="Interface\AddOns\OneBag\media\Chest.BLP">
+					<TexCoords left="0.09" right="0.91" top="0.09" bottom="0.91"/>
+				</PushedTexture>
+				<HighlightTexture alphaMode="ADD" file="Interface\AddOns\OneBag\media\Chest.BLP"/>
+			</Button>
+			<Button name="$parentInventoryButton">
+				<Size>
+					<AbsDimension x="22" y="20"/>
+				</Size>
+				<Anchors>
+					<Anchor point="TOPLEFT">
+						<Offset>
+							<AbsDimension x="3" y="-9"/>
+						</Offset>
+					</Anchor>
+				</Anchors>
+				<Scripts>
+					<OnShow>
+						this:SetNormalTexture("Interface\\AddOns\\OneBag\\media\\bags.BLP")
+						this:SetPushedTexture("Interface\\AddOns\\OneBag\\media\\bags.BLP")
+					</OnShow>
+					<OnClick>
+						local handler = this:GetParent().handler
+						if handler.db.profile.show.inventory then
+							handler.db.profile.show.inventory = false
+						else
+							handler.db.profile.show.inventory = true
+						end
+						this:SetNormalTexture("Interface\\AddOns\\OneBag\\media\\bags.BLP")
+						this:SetPushedTexture("Interface\\AddOns\\OneBag\\media\\bags.BLP")
+						handler:OrganizeFrame()
+					</OnClick>
+				</Scripts>
+				<NormalTexture file="Interface\AddOns\OneBag\media\bags.BLP"/>
+				<PushedTexture file="Interface\AddOns\OneBag\media\bags.BLP"/>
+				<HighlightTexture file="Interface\AddOns\OneBag\media\bags.BLP" alphaMode="ADD"/>
+			</Button>
+			<Button name="$parentBankButton">
+				<Size>
+					<AbsDimension x="22" y="20"/>
+				</Size>
+				<Anchors>
+					<Anchor point="TOPLEFT">
+						<Offset>
+							<AbsDimension x="3" y="-9"/>
+						</Offset>
+					</Anchor>
+				</Anchors>
+				<Scripts>
+					<OnShow>
+						this:SetNormalTexture("Interface\\AddOns\\OneBag\\media\\bags.BLP")
+						this:SetPushedTexture("Interface\\AddOns\\OneBag\\media\\bags.BLP")
+					</OnShow>
+					<OnClick>
+						local handler = this:GetParent().handler
+						if handler.db.profile.show.bank then
+							handler.db.profile.show.bank = false
+						else
+							handler.db.profile.show.bank = true
+						end
+						this:SetNormalTexture("Interface\\AddOns\\OneBag\\media\\bags.BLP")
+						this:SetPushedTexture("Interface\\AddOns\\OneBag\\media\\bags.BLP")
+						handler:OrganizeFrame()
+					</OnClick>
+					<OnLoad>
+					</OnLoad>
+				</Scripts>
+				<NormalTexture file="Interface\AddOns\OneBag\media\bags.BLP"/>
+				<PushedTexture file="Interface\AddOns\OneBag\media\bags.BLP"/>
+				<HighlightTexture file="Interface\AddOns\OneBag\media\bags.BLP" alphaMode="ADD"/>
+			</Button>
+			<CheckButton name="$parentBag1" inherits="OneViewBagButtonTemplate" id="1">
+				<Anchors>
+					<Anchor point="LEFT" relativeTo="$parentBag0" relativePoint="RIGHT">
+						<Offset>
+							<AbsDimension x="2" y="0"/>
+						</Offset>
+					</Anchor>
+				</Anchors>
+			</CheckButton>
+			<CheckButton name="$parentBag2" inherits="OneViewBagButtonTemplate" id="2">
+				<Anchors>
+					<Anchor point="LEFT" relativeTo="$parentBag1" relativePoint="RIGHT">
+						<Offset>
+							<AbsDimension x="2" y="0"/>
+						</Offset>
+					</Anchor>
+				</Anchors>
+			</CheckButton>
+			<CheckButton name="$parentBag3" inherits="OneViewBagButtonTemplate" id="3">
+				<Anchors>
+					<Anchor point="LEFT" relativeTo="$parentBag2" relativePoint="RIGHT">
+						<Offset>
+							<AbsDimension x="2" y="0"/>
+						</Offset>
+					</Anchor>
+				</Anchors>
+			</CheckButton>
+			<CheckButton name="$parentBag4" inherits="OneViewBagButtonTemplate" id="4">
+				<Anchors>
+					<Anchor point="LEFT" relativeTo="$parentBag3" relativePoint="RIGHT">
+						<Offset>
+							<AbsDimension x="2" y="0"/>
+						</Offset>
+					</Anchor>
+				</Anchors>
+			</CheckButton>
+			<CheckButton name="$parentBag5" inherits="OneViewBagButtonTemplate" id="5">
+				<Anchors>
+					<Anchor point="LEFT">
+						<Offset>
+							<AbsDimension x="0" y="0"/>
+						</Offset>
+					</Anchor>
+				</Anchors>
+			</CheckButton>
+			<CheckButton name="$parentBag6" inherits="OneViewBagButtonTemplate" id="6">
+				<Anchors>
+					<Anchor point="LEFT" relativeTo="$parentBag5" relativePoint="RIGHT">
+						<Offset>
+							<AbsDimension x="2" y="0"/>
+						</Offset>
+					</Anchor>
+				</Anchors>
+			</CheckButton>
+			<CheckButton name="$parentBag7" inherits="OneViewBagButtonTemplate" id="7">
+				<Anchors>
+					<Anchor point="LEFT" relativeTo="$parentBag6" relativePoint="RIGHT">
+						<Offset>
+							<AbsDimension x="2" y="0"/>
+						</Offset>
+					</Anchor>
+				</Anchors>
+			</CheckButton>
+			<CheckButton name="$parentBag8" inherits="OneViewBagButtonTemplate" id="8">
+				<Anchors>
+					<Anchor point="LEFT" relativeTo="$parentBag7" relativePoint="RIGHT">
+						<Offset>
+							<AbsDimension x="2" y="0"/>
+						</Offset>
+					</Anchor>
+				</Anchors>
+			</CheckButton>
+			<CheckButton name="$parentBag9" inherits="OneViewBagButtonTemplate" id="9">
+				<Anchors>
+					<Anchor point="LEFT" relativeTo="$parentBag8" relativePoint="RIGHT">
+						<Offset>
+							<AbsDimension x="2" y="0"/>
+						</Offset>
+					</Anchor>
+				</Anchors>
+			</CheckButton>
+			<CheckButton name="$parentBag10" inherits="OneViewBagButtonTemplate" id="10">
+				<Anchors>
+					<Anchor point="LEFT" relativeTo="$parentBag9" relativePoint="RIGHT">
+						<Offset>
+							<AbsDimension x="2" y="0"/>
+						</Offset>
+					</Anchor>
+				</Anchors>
+			</CheckButton>
+			<Frame name="$parentMoneyFrame" inherits="SmallMoneyFrameTemplate">
+				<Size>
+					<AbsDimension x="206" y="14"/>
+				</Size>
+				<Anchors>
+					<Anchor point="BOTTOMRIGHT" relativeTo="$parent" relativePoint="BOTTOMRIGHT">
+						<Offset>
+							<AbsDimension x="0" y="8"/>
+						</Offset>
+					</Anchor>
+				</Anchors>
+			</Frame>
+		</Frames>
+		<Layers>
+			<Layer level="ARTWORK">
+				<FontString name="$parentBankName" inherits="GameFontNormal" justifyH="LEFT">
+					<Anchors>
+						<Anchor point="LEFT" relativeTo="OneViewFrameBankButton" relativePoint="RIGHT">
+							<Offset>     
+								<AbsDimension x="5" y="1"/>
+							</Offset>
+						</Anchor>
+					</Anchors>
+				</FontString>
+				<FontString name="$parentInventoryName" inherits="GameFontNormal" justifyH="LEFT">
+					<Anchors>
+						<Anchor point="LEFT" relativeTo="$parentInventoryButton" relativePoint="RIGHT">
+							<Offset>
+								<AbsDimension x="5" y="1"/>
+							</Offset>
+						</Anchor>
+					</Anchors>
+				</FontString>
+				<!-- OneView 银行/库存底部信息区：同样缩到 GameFontNormalSmall，与 OneBag 底部文字一致 -->
+				<FontString name="$parentBankInfo1" inherits="GameFontNormalSmall" justifyH="LEFT">
+					<Anchors>
+						<Anchor point="BOTTOMLEFT">
+							<Offset>
+								<AbsDimension x="8" y="9"/>
+							</Offset>
+						</Anchor>
+					</Anchors>
+				</FontString>
+				<FontString name="$parentBankInfo2" inherits="GameFontNormalSmall" justifyH="LEFT">
+					<Anchors>
+						<Anchor point="TOPLEFT" relativeTo="$parentBankInfo1" relativePoint="TOPRIGHT">
+							<Offset>
+								<AbsDimension x="5" y="0"/>
+							</Offset>
+						</Anchor>
+					</Anchors>
+				</FontString>
+				<FontString name="$parentBankInfo3" inherits="GameFontNormalSmall" justifyH="LEFT">
+					<Anchors>
+						<Anchor point="TOPLEFT" relativeTo="$parentBankInfo2" relativePoint="TOPRIGHT">
+							<Offset>
+								<AbsDimension x="5" y="0"/>
+							</Offset>
+						</Anchor>
+					</Anchors>
+				</FontString>
+				<FontString name="$parentBankInfo4" inherits="GameFontNormalSmall" justifyH="LEFT">
+					<Anchors>
+						<Anchor point="TOPLEFT" relativeTo="$parentBankInfo3" relativePoint="TOPRIGHT">
+							<Offset>
+								<AbsDimension x="5" y="0"/>
+							</Offset>
+						</Anchor>
+					</Anchors>
+				</FontString>
+				<FontString name="$parentInventoryInfo1" inherits="GameFontNormalSmall" justifyH="LEFT">
+					<Anchors>
+						<Anchor point="BOTTOMLEFT">
+							<Offset>
+								<AbsDimension x="8" y="9"/>
+							</Offset>
+						</Anchor>
+					</Anchors>
+				</FontString>
+				<FontString name="$parentInventoryInfo2" inherits="GameFontNormalSmall" justifyH="LEFT">
+					<Anchors>
+						<Anchor point="TOPLEFT" relativeTo="$parentInventoryInfo1" relativePoint="TOPRIGHT">
+							<Offset>
+								<AbsDimension x="5" y="0"/>
+							</Offset>
+						</Anchor>
+					</Anchors>
+				</FontString>
+				<FontString name="$parentInventoryInfo3" inherits="GameFontNormalSmall" justifyH="LEFT">
+					<Anchors>
+						<Anchor point="TOPLEFT" relativeTo="$parentInventoryInfo2" relativePoint="TOPRIGHT">
+							<Offset>
+								<AbsDimension x="5" y="0"/>
+							</Offset>
+						</Anchor>
+					</Anchors>
+				</FontString>
+				<FontString name="$parentInventoryInfo4" inherits="GameFontNormalSmall" justifyH="LEFT">
+					<Anchors>
+						<Anchor point="TOPLEFT" relativeTo="$parentInventoryInfo3" relativePoint="TOPRIGHT">
+							<Offset>
+								<AbsDimension x="5" y="0"/>
+							</Offset>
+						</Anchor>
+					</Anchors>
+				</FontString>
+			</Layer>
+		</Layers>
+	</Frame>
+</Ui>

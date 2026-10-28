@@ -1,0 +1,15 @@
+# 内部开发记录，不随插件分发
+.workbuddy/
+
+# 备份 / 临时产物
+*.bak
+*.orig
+*.rej
+*~
+*.tmp
+*.log
+
+# 系统文件
+Thumbs.db
+desktop.ini
+.DS_Store

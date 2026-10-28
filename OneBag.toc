@@ -1,0 +1,19 @@
+## Interface: 11200
+## Title: OneBag
+## Notes: One bag to rule them all, and in the darkness bind them.
+## Title-zhCN:OneBag 背包整合
+## Title: |CFF33AAFF[背包]|ROneBag背包整合
+## X-Category: Inventory
+## Version: 2.0
+## Author: 阿拉正经人，Kaelten, 1.12 modify by 凡人, SortBags by shirsig, tian880212 (modified build)
+
+## SavedVariables: OneBagDB, OneBankDB, OneRingDB, OneViewDB, ItemLockDB, OneBagSortLockDB
+## OptionalDeps: !Libs
+## Dependencies: !Libs
+
+locals.lua
+ItemLock.lua      
+OneBag.lua    
+OneBag.xml
+SortBags.lua
+bindings.xml
