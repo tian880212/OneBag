@@ -44,12 +44,26 @@
 真正的 40~80ms 尖峰全在**引擎侧**（80+ 按钮首次绘制、图标贴图首次上传、边框背景首次构建）。
 这类开销无法用 Lua 优化掉，只能**挪到玩家按背包键之前**。
 
-- **登录后后台「预热真画」**：6.5 秒后把整个背包框 `Show()` 真实绘制一次，立刻 `SetAlpha(0.02)`，
-  0.35 秒后 `Hide()` 并恢复 alpha 与鼠标响应
+- **登录后后台「预热真画」**：6.5 秒后把整个背包框 **挪到屏幕外**（临时关掉 `SetClampedToScreen`，
+  斜向 `-4000, -4000`）、`SetAlpha(0)` 真实绘制 **1 帧**，下一帧立刻 `Hide()` 并还原锚点、alpha、鼠标响应
+  - 光调 `SetClampedToScreen(false)` 不够：`OnBaseShow` 里有 `_baseClamped` 缓存判断，
+    不同步缓存会被它按 `profile.clamped` 改回去，框被钳回屏幕内 → 表现就是
+    「明明挪到屏外，却闪在屏幕左下角」
+  - 窗口内把 `OBBagFram` / `OneBankFrame` / `OneRingFrame` / `OneViewFrame` / `OBBBagFra`
+    的 alpha 也临时压 0 并记录还原值：这些是 `parent=UIParent` 的独立顶层框，
+    其中银行/戒指框在 XML 里**没有锚点**，默认就停在左下角，任何一次误 Show 都会露馅
+  - 为什么必须挪到屏外：只压 alpha 压不住，0.02 在 1.12 上肉眼仍能看见，会表现为
+    「进游戏几秒后背包自己弹出来又消失」的鬼影（`S_ItemTip` 装等面板的预热就是这么做的）
+  - 为什么必须只画 1 帧：预热真正需要的只是「第一次被绘制的那一帧」，可见窗口一旦拉长到
+    0.35 秒（约 21 帧），窗口内的异步 `BAG_UPDATE → Refresh` 就能把标签条、侧边栏这些
+    **独立顶层框**（`parent=UIParent`，不吃主框 alpha）整块点亮，表现为「/reload 不闪、
+    小退进游戏却闪」。帧数制比固定秒数可靠，不要再改回 `elapsed < 0.35`
+  - `_warming` 守卫覆盖整个可见窗口：同步路径（`OnShow → Refresh → UpdateButtons`）靠它拦住
   - 只在物品数据都解析完成后才画（否则画的是空图标，白跑），失败最多重试 6 次
-  - 预热期间抑制开关背包音效与分类页刷新（`_warming` 守卫）
-  - 预热窗口内玩家自己按开背包时只恢复外观、不隐藏（`_warmupAborted`）
+  - 可见窗口内玩家自己按开背包时只恢复外观、不隐藏（`_warmupAborted`）
   - 玩家手动开过一次就不再预热（`_warmupDrawn`）
+  - 开关：`/obwarmup` 切换（存 `profile.warmupDraw`，下次进入游戏生效）；
+    `/obwarm` 立即手动跑一次（不用反复小退，便于验证）
 - 后台 `GetItemInfo` 缓存预热（参考 Guda 的 `CacheWarmer`），与工作队列共享每帧预算，
   拖拽时暂停队列以保住帧率
 

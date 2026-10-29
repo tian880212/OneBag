@@ -809,6 +809,90 @@ local function ScheduleTimer(delay, callback)
 end
 
 --=============================================================================
+-- 诊断（临时，2026.10.29）：定位「预热窗口里到底是谁闪了一下」。
+-- 用法：/obdbg 开启（写入 profile.dbgShow）→ /reload → 看聊天框。
+--
+-- 实现说明：**不能用 Lua 覆写 frame.Show/frame.Hide 来挂钩**。1.12 的 C 方法
+-- 依赖隐式 `this`，在 Lua 包装里用 `oShow()` 再调出去会变成
+-- "Attempt to find 'this' in non-table object"，直接报错 —— 实测把
+-- 背包的 Show 和标签条的 Hide 全废了（标签条因此一直亮着）。
+-- 改用「预热窗口内逐帧轮询 IsVisible」，只读不改，安全。
+--=============================================================================
+local _dbgOn = false
+local _dbgStart = 0
+local _dbgCand = {}          -- 各标签条 buttonFrame（工厂里注册，子框，跟着主框走）
+local _dbgWatch = nil        -- { list = {{frame, name}, ...}, seen = {[frame]=bool}, stopAt = 秒 }
+
+local function OneBag_DbgReg(frame, name)
+    if frame then table.insert(_dbgCand, { frame = frame, name = name }) end
+end
+
+local function OneBag_DbgSay(msg)
+    DEFAULT_CHAT_FRAME:AddMessage(string.format("|cFFFF8000[OBDbg]|r %.2fs %s",
+        GetTime() - _dbgStart, msg))
+end
+
+local _dbgDriver
+_dbgDriver = CreateFrame("Frame")
+_dbgDriver:SetScript("OnUpdate", function()
+    if not _dbgWatch then _dbgDriver:Hide(); return end
+    local w = _dbgWatch
+    local now = GetTime()
+    for _, e in ipairs(w.list) do
+        local f, name = e[1], e[2]
+        local vis = f:IsVisible()
+        if vis and not w.seen[f] then
+            w.seen[f] = true
+            local top, left = f:GetTop(), f:GetLeft()
+            OneBag_DbgSay(string.format("APPEAR %s alpha=%.2f x=%s y=%s warming=%s",
+                name, f:GetAlpha(),
+                tostring(left and math.floor(left) or "nil"),
+                tostring(top and math.floor(top) or "nil"),
+                tostring(OneBag and OneBag._warming)))
+        elseif not vis then
+            w.seen[f] = false
+        end
+    end
+    if now > w.stopAt then
+        _dbgWatch = nil
+        OneBag_DbgSay("轮询结束")
+    end
+end)
+_dbgDriver:Hide()
+
+-- 预热开始处调用：把候选框当前可见状态记下来，之后谁从"不可见"变成"可见"就报谁
+local function OneBag_DbgStartWatch(seconds)
+    if not _dbgOn then return end
+    local list = {}
+    local names = { "OneBagFrame", "OBBagFram", "OneBankFrame", "OBBBagFra",
+                    "OneRingFrame", "OneViewFrame" }
+    -- 连原生 ContainerFrame 一起盯：预热窗口里 IsBagOpen 对外返回 nil，
+    -- 若客户端因此自己把默认背包框放出来，也是一闪的来源
+    for i = 1, 5 do table.insert(names, "ContainerFrame" .. i) end
+    for _, n in ipairs(names) do
+        local f = getglobal(n)
+        if f then table.insert(list, { f, n }) end
+    end
+    for _, e in ipairs(_dbgCand) do table.insert(list, { e.frame, e.name }) end
+    local seen = {}
+    for _, e in ipairs(list) do seen[e[1]] = e[1]:IsVisible() end
+    _dbgWatch = { list = list, seen = seen, stopAt = GetTime() + (seconds or 1.5) }
+    _dbgDriver:Show()
+end
+
+SlashCmdList["ONEBAG_DBG"] = function()
+    if not (OneBag and OneBag.db and OneBag.db.profile) then
+        DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[OBDbg]|r OneBag 未就绪")
+        return
+    end
+    local p = OneBag.db.profile
+    p.dbgShow = not p.dbgShow
+    DEFAULT_CHAT_FRAME:AddMessage("|cFFFF8000[OBDbg]|r 预热框体记录已"
+        .. (p.dbgShow and "开启" or "关闭") .. "，输入 /reload 生效")
+end
+SLASH_ONEBAG_DBG1 = "/obdbg"
+
+--=============================================================================
 -- 后台缓存预热（参考 Guda 的 CacheWarmer）：登录后把背包物品 GetItemInfo 填满，
 -- 物品数据从服务器到达后重渲染可见背包，使首次打开时任务标记/品质着色不因
 -- 客户端物品缓存冷启动而缺失。全部经帧预算调度器分摊到多帧，登录瞬间不卡顿。
@@ -902,65 +986,189 @@ local function PrebuildItemButtons()
 end
 
 --=============================================================================
--- 预热「真画一次」（2026.10.28）
+-- 预热「真画一次」（2026.10.28；2026.10.29 改为「先挪到屏幕外再画」）
 -- 为什么预建还不够：预建只是 CreateFrame，80+ 个按钮的首次绘制、每张图标贴图的
 -- 首次上传、边框背景的首次构建，全都发生在「第一次真正被绘制」的那一帧。
 -- 实测证据：Lua 侧 OnShow 均 2.5ms，但打开背包时仍有 52~78ms 的帧间隙，
 -- 差值全在引擎侧 —— 这笔成本没法在 Lua 里省，只能挪到按背包键之前。
--- 做法（借鉴 S_ItemTip 的 warmup）：登录后把整个背包框以 2% 不透明度显示 0.35 秒，
--- 走完整 OnShow 把成本付掉，然后关掉并恢复透明度/鼠标。
+-- 做法（照抄本机 S_ItemTip 装等面板的预热，它不闪）：关掉 SetClampedToScreen，
+-- 把整个框挪到屏幕外（y=-2000），alpha 0，真画一帧，下一帧立刻收掉并恢复原锚点。
+-- 关键教训一：**只压 alpha 压不住**。0.02 在 1.12 上肉眼照样看得见（加法混合的
+-- 边框/图标尤其明显），实测就是「进游戏几秒后背包自己弹出来又消失」；挪到屏外才是根治。
+-- 关键教训二（2026.10.29 第二次修）：原来可见窗口长达 0.35 秒 = 约 21 帧，
+-- 玩家实测「/reload 不闪、小退进游戏却闪」，说明窗口太长时总有东西漏进画面
+-- （顶层独立框不继承主框 alpha，窗口内的异步刷新也能把它们 Show 出来）。
+-- 而预热真正需要的只是「第一次被绘制的那一帧」——贴图首次上传、边框构建、
+-- 几何提交都在那一帧完成。所以改成**只画 1 帧**：OnUpdate 第 2 帧就 Hide，
+-- 可见时间 16~30ms，肉眼抓不到，成本照付。不要再改回固定秒数。
 --=============================================================================
-local function WarmupDraw(attempt)
+-- 预热窗口内要一并压成透明的 OneBag 顶层框。它们都是 parent=UIParent 的独立框，
+-- 不继承主框 alpha；其中 OneBankFrame / OneRingFrame 在 XML 里根本没有锚点，
+-- 默认就停在屏幕左下角 —— 玩家反馈「闪在左下角」就是它们这一类。
+-- 主框自己单独处理（要按 profile.alpha 还原），不放在这里。
+-- 分类/品质标签条不用列：它们是 CreateFrame("Frame", nil, owner.frame) 的匿名子框，
+-- 继承主框 alpha，主框压 0 它们就跟着没。这里只列真正的顶层独立框。
+local WARMUP_ALPHA_FRAMES = {
+    "OBBagFram",      -- 背包左侧换包栏（parent=UIParent，锚在 OneBagFrame 左上）
+    "OneBankFrame",   -- 银行（parent=UIParent，XML 无锚点 → 默认左下角）
+    "OBBBagFra",      -- 银行侧边换包栏
+    "OneRingFrame",   -- 戒指/饰品栏
+    "OneViewFrame",   -- 离线银行/查看（parent=UIParent）
+}
+
+local function WarmupDraw(attempt, force)
     local mod = OneBag
     if not (mod and mod.frame) then return end
     local frame = mod.frame
-    if frame:IsVisible() or frame._warmupDrawn then return end   -- 玩家已经开着：别抢
+    if frame:IsVisible() then return end          -- 玩家已经开着：别抢（force 也不抢）
+    if frame._warmupDrawn and not force then return end   -- 已经预热过
+    -- A/B 开关：/obwarmup 可关掉（profile.warmupDraw == false）；/obwarm 手动强制时无视
+    if not force and mod.db and mod.db.profile and mod.db.profile.warmupDraw == false then return end
 
     -- 物品数据还没全就绪时图标贴图是空的，这时候画一遍等于白跑，等下一次
     attempt = attempt or 0
     if not AllBagItemsResolved() and attempt < 6 then
-        ScheduleTimer(1.5, function() WarmupDraw(attempt + 1) end)
+        ScheduleTimer(1.5, function() WarmupDraw(attempt + 1, force) end)
         return
     end
     frame._warmupDrawn = true
+    mod._warmupAborted = nil          -- 清掉可能残留的上一次中断标记
 
     local profile = mod.db and mod.db.profile
     local realAlpha = (profile and profile.alpha) or 1
 
-    -- 抑制标志：OnShow/OnHide 里的开/关背包音效、分类标签刷新都要跳过
+    -- 抑制标志：OnShow/OnHide 里的开/关背包音效、标签条/侧边栏刷新都要跳过。
+    -- 必须整个可见窗口都保持 true，否则窗口内任何 BAG_UPDATE → Refresh →
+    -- UpdateButtons 都会把标签条（独立顶层框，不吃主框 alpha）重新 Show 出来。
     mod._warming = true
-    frame:EnableMouse(false)          -- 这 0.35 秒别抢玩家鼠标
-    pcall(function()
-        frame:Show()                  -- 走完整 OnShow：布局/上色/首次绘制全付
-        frame:SetAlpha(0.02)          -- 绘制在帧末发生，这里改 alpha 还来得及
-    end)
-    mod._warming = nil
 
-    local elapsed = 0
+    -- 把其余 OneBag 顶层框全部临时压成透明，记下原值等窗口结束再还原。
+    -- 这一步是「兜底」：不管窗口内是谁被 Show 出来的，都绝对看不见。
+    local alphaBackup = {}
+    for _, n in ipairs(WARMUP_ALPHA_FRAMES) do
+        local f = getglobal(n)
+        if f then
+            table.insert(alphaBackup, { f, f:GetAlpha() })
+            f:SetAlpha(0)
+        end
+    end
+
+    frame:SetAlpha(0)
+    frame:EnableMouse(false)              -- 这一帧别抢玩家鼠标
+    -- 关掉屏幕钳制（挪出屏幕后不会被客户端拉回来）。注意 _baseClamped 缓存也要同步：
+    -- OnBaseShow 里是「_baseClamped ~= profile.clamped 才 SetClampedToScreen」，
+    -- 光调 SetClampedToScreen 不改缓存，Show() 时会被它按 profile 改回去 ——
+    -- 那正是「明明挪到屏外，却闪在屏幕左下角」的原因。
+    local prevBaseClamped = mod._baseClamped
+    mod._baseClamped = false
+    frame:SetClampedToScreen(false)
+    if frame.bagFrame then frame.bagFrame:SetClampedToScreen(false) end
+    if OneBag_DbgStartWatch then OneBag_DbgStartWatch(0.5) end   -- 诊断：抓窗口内的异动
+    pcall(function()
+        frame:Show()                      -- 走完整 OnShow：布局/上色/首次绘制全付
+        -- OnShow → OnCustomShow 会按 db.profile.point 把框贴回原位，
+        -- 所以「挪出屏幕」必须放在 Show() 之后：绘制在帧末发生，这一帧还来得及。
+        -- Show 之后再把 clamped 压一次，兜住 OnBaseShow 可能刚做的设置。
+        frame:SetClampedToScreen(false)
+        frame:ClearAllPoints()
+        -- 挪到左下外侧很远（而不是只在正下方 2000）：斜着挪，任何方向上的钳制/边缘
+        -- 计算都落不到屏幕里。玩家反馈「闪在左下角」就是被钳回屏幕底部造成的。
+        frame:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", -4000, -4000)
+        frame:SetAlpha(0)                 -- OnBaseShow 可能重设过 alpha，再压一次
+    end)
+
+    -- 只画 1 帧：第 1 次 OnUpdate（本帧开始）返回，让本帧末完成首次绘制；
+    -- 第 2 次 OnUpdate 立即 Hide，本帧末就不再画了。可见窗口 ~16ms。
+    local frames = 0
     local ticker = CreateFrame("Frame")
     ticker:SetScript("OnUpdate", function()
-        elapsed = elapsed + arg1
-        if elapsed < 0.35 then return end
+        frames = frames + 1
+        if frames < 2 then return end
         ticker:SetScript("OnUpdate", nil)
         ticker:Hide()
+        -- 先还原被临时压透明的其余顶层框（不论是第几帧，哪怕主框没了也要还原）
+        for _, e in ipairs(alphaBackup) do e[1]:SetAlpha(e[2]) end
         local f = mod.frame
-        if not f then return end
-        -- 若这 0.35 秒里玩家自己按开了背包（OnShow 会置 _warmupAborted），
-        -- 那就只恢复外观，不能把玩家刚打开的背包关掉
+        if not f then
+            mod._baseClamped = prevBaseClamped
+            mod._warming = nil
+            return
+        end
+        -- 玩家在窗口里自己开了背包（ToggleBag/OpenBag/CloseBag 会置位），
+        -- 那就只恢复外观，不能把他刚打开的背包关掉
         local aborted = mod._warmupAborted
         mod._warmupAborted = nil
-        mod._warming = true
         if not aborted then f:Hide() end
-        mod._warming = nil
+        -- 还原锚点：清过 points 就必须自己贴回去，不能指望 OnCustomShow ——
+        -- db.profile.point 为 nil（从没拖动过）时它什么都不做，框会掉到左下角
+        f:ClearAllPoints()
+        local pt = mod.db and mod.db.profile and mod.db.profile.point
+        if pt then
+            f:SetPoint("TOPLEFT", pt.parent, "BOTTOMLEFT", pt.left, pt.top)
+        else
+            f:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 400, -300)   -- 与 OneBag.xml 默认锚点一致
+        end
+        -- 还原屏幕钳制，并把 _baseClamped 缓存写成「当前实际值」，否则预热时
+        -- 临时设的 false 会被缓存记成"已经设过"，下次 OnBaseShow 就不再纠正
+        local clamped = (mod.db and mod.db.profile and mod.db.profile.clamped) and true or false
+        f:SetClampedToScreen(clamped)
+        if f.bagFrame then f.bagFrame:SetClampedToScreen(clamped) end
+        mod._baseClamped = clamped
         f:SetAlpha(realAlpha)
         f:EnableMouse(true)
+        -- 作废 alpha 缓存：万一预热中途出错没恢复，下次开包 OnBaseShow 会重新套用
+        -- profile.alpha，兜底避免背包变成"打开了但看不见"。
+        mod._baseAlpha = nil
+        mod._warming = nil
+        if aborted and f:IsVisible() then
+            -- 玩家现在能看到背包了：把被压制掉的侧边栏/标签条按正常逻辑补回来
+            if f.bagFrame and f.bagFrame.wasShown then
+                f.bagFrame:Show()
+                f.bagFrame.wasShown = false
+            end
+            if OneBagCategory then OneBagCategory:UpdateButtons() end
+            if OneBagQuality then OneBagQuality:UpdateButtons() end
+        end
     end)
     ticker:Show()
 end
 
+-- 预热开关（A/B 排查用，1.12 无选项面板依赖）：/obwarmup 切换，持久化到 profile
+SlashCmdList["ONEBAG_WARMUPDRAW"] = function()
+    if not (OneBag and OneBag.db and OneBag.db.profile) then return end
+    local p = OneBag.db.profile
+    p.warmupDraw = not (p.warmupDraw ~= false)
+    DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00[OneBag]|r 登录预热真画已"
+        .. (p.warmupDraw and "开启" or "关闭") .. "（下次进入游戏生效）")
+end
+SLASH_ONEBAG_WARMUPDRAW1 = "/obwarmup"
+
+-- 手动立即预热一次（2026.10.29）：/obwarm
+-- 正常路径是「进入游戏后 6.5 秒自动跑一次」，但玩家实测 /reload 后不闪、只有小退
+-- 进游戏才闪，说明两个入口的时机不一致。有了这个命令，不用反复小退就能验证。
+SlashCmdList["ONEBAG_WARMUPNOW"] = function()
+    if not (OneBag and OneBag.frame) then
+        DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[OneBag]|r 还没就绪")
+        return
+    end
+    if OneBag.frame:IsVisible() then
+        DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[OneBag]|r 背包正开着，先关掉再试")
+        return
+    end
+    OneBag.frame._warmupDrawn = nil
+    DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00[OneBag]|r 正在执行一次预热真画（1 帧，屏外）")
+    WarmupDraw(0, true)
+end
+SLASH_ONEBAG_WARMUPNOW1 = "/obwarm"
+
 local function StartCacheWarmup()
     if _warmupStarted then return end
     _warmupStarted = true
+    -- 诊断开关：/obdbg 会写 profile.dbgShow，重新登录时在这里装钩子
+    if OneBag and OneBag.db and OneBag.db.profile and OneBag.db.profile.dbgShow then
+        _dbgOn = true
+        _dbgStart = GetTime()
+    end
     for _, delay in ipairs({0.5, 2, 5, 10}) do
         ScheduleTimer(delay, function()
             if _warmupComplete then return end
@@ -1072,6 +1280,7 @@ function CreateCategoryModule(name)
 
     function Module:CreateUI()
         buttonFrame = CreateFrame("Frame", nil, owner.frame)
+        if OneBag_DbgReg then OneBag_DbgReg(buttonFrame, tostring(name) .. "-Tabs") end
         buttonFrame:SetWidth(40)
         buttonFrame:SetHeight(300)
         buttonFrame:SetPoint("TOPLEFT", owner.frame, "TOPLEFT", -169, -40)
@@ -1210,6 +1419,10 @@ function CreateCategoryModule(name)
             self:Hide()
             return
         end
+
+        -- 预热窗口内不弹标签页：分类/品质标签是独立顶层框，不吃主框的 alpha，
+        -- 会在预热那 0.35 秒里整块亮一下再消失
+        if owner._warming then buttonFrame:Hide(); return end
 
         -- 检查全局开关 - 从 OneBag 数据库获取
         local filterVisible = true
@@ -1354,6 +1567,7 @@ function CreateQualityModule(name)
 
     function Module:CreateUI()
         buttonFrame = CreateFrame("Frame", nil, owner.frame)
+        if OneBag_DbgReg then OneBag_DbgReg(buttonFrame, tostring(name) .. "-Tabs") end
         buttonFrame:SetWidth(120)  
         buttonFrame:SetHeight(16)  
         buttonFrame:SetPoint("TOPLEFT", owner.frame, "TOPLEFT", 8, -36)
@@ -1485,6 +1699,9 @@ function Module:UpdateButtons()
         return
     end
 
+    -- 预热窗口内不弹标签页（独立顶层框，不吃主框 alpha）
+    if owner._warming then buttonFrame:Hide(); return end
+
     -- Quality模块始终显示，不检查全局开关
     -- 只检查背包侧边栏是否显示
     if owner.frame.bagFrame and (owner.frame.bagFrame:IsVisible() or owner.frame.bagFrame.wasShown) then
@@ -1607,6 +1824,7 @@ function CreateOneViewCategoryModule(name)
 
     function Module:CreateUI()
         buttonFrame = CreateFrame("Frame", nil, owner.frame)
+        if OneBag_DbgReg then OneBag_DbgReg(buttonFrame, tostring(name) .. "-Tabs") end
         buttonFrame:SetWidth(40)
         buttonFrame:SetHeight(300)
         buttonFrame:SetPoint("TOPLEFT", owner.frame, "TOPLEFT", -38, -40)
@@ -1728,7 +1946,10 @@ function Module:UpdateButtons()
         self:Hide()
         return
     end
-    
+
+    -- 预热窗口内不弹标签页（独立顶层框，不吃主框 alpha）
+    if owner._warming then buttonFrame:Hide(); return end
+
     -- 检查全局开关 - 从 OneBag 数据库获取
     local filterVisible = true
     if OneBag and OneBag.db and OneBag.db.profile then
@@ -1867,6 +2088,7 @@ function CreateOneViewQualityModule(name)
 
     function Module:CreateUI()
         buttonFrame = CreateFrame("Frame", nil, owner.frame)
+        if OneBag_DbgReg then OneBag_DbgReg(buttonFrame, tostring(name) .. "-Tabs") end
         buttonFrame:SetWidth(120)  
         buttonFrame:SetHeight(16)  
         buttonFrame:SetPoint("TOPLEFT", owner.frame, "TOPLEFT", 8, -36)
@@ -1985,7 +2207,10 @@ function CreateOneViewQualityModule(name)
         self:Hide()
         return
     end
-    
+
+    -- 预热窗口内不弹标签页（独立顶层框，不吃主框 alpha）
+    if owner._warming then buttonFrame:Hide(); return end
+
     -- Quality模块始终显示，不检查全局开关
     -- 只检查背包侧边栏是否显示
     if owner.frame.bagFrame and (owner.frame.bagFrame:IsVisible() or owner.frame.bagFrame.wasShown) then
@@ -4320,7 +4545,8 @@ function module:OnShow()
     self:OnCustomShow()
     -- 预热期间不播开关背包音效（否则登录后突然"哗"一声）
     if not self._warming then PlaySound("igBackPackOpen") end
-    if self.frame.bagFrame and self.frame.bagFrame.wasShown then
+    -- 预热期间不要连带把侧边背包栏（OBBagFram，独立顶层框，不受主框 alpha 影响）拉出来
+    if self.frame.bagFrame and self.frame.bagFrame.wasShown and not self._warming then
         self.frame.bagFrame:Show()
         self.frame.bagFrame.wasShown = false
     end
@@ -4796,21 +5022,28 @@ end
 
 function OneBag:ToggleBag(bag)
     if bag and (bag < 0 or bag > 4) then return self.hooks.ToggleBag.orig(bag) end
+    -- 预热窗口内玩家自己按了背包键：标记中断，窗口结束时别把他刚开的背包关掉
+    if self._warming then self._warmupAborted = true end
     if self.frame:IsVisible() then self.frame:Hide() else self.frame:Show() end
 end
 
 function OneBag:IsBagOpen(bag)
     if bag < 0 or bag > 4 then return self.hooks.IsBagOpen.orig(bag) end
+    -- 预热窗口内对外一律表现为「背包没开」：此时框是被挪到屏幕外画着的，
+    -- 如果骗外面说开着，遍历 IsBagOpen 的逻辑（隐藏原生 ContainerFrame 等）会跟着乱动
+    if self._warming then return nil end
     if self.frame:IsVisible() then return bag else return nil end
 end
 
 function OneBag:OpenBag(bag)
     if bag and (bag < 0 or bag > 4) then return self.hooks.OpenBag.orig(bag) end
+    if self._warming then self._warmupAborted = true end
     self.frame:Show()
 end
 
 function OneBag:CloseBag(bag)
     if bag and (bag < 0 or bag > 4) then return self.hooks.CloseBag.orig(bag) end
+    if self._warming then self._warmupAborted = true end
     self.frame:Hide()
 end
 
