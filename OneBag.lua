@@ -2340,6 +2340,13 @@ function OneCore:OnInitialize()
     self.modulePrototype.stratas = {"LOW", "MEDIUM", "HIGH", "DIALOG", "FULLSCREEN", "FULLSCREEN_DIALOG", "TOOLTIP"}
 end
 
+--=== 整体缩放基准（2026.11.17）=============================================
+-- 需求：窗口整体小一号 —— 设置里显示 100% 时，实际只占原来的 90%。
+-- 做法：不改 SavedVariables 里的 scale（存档保持用户设置值，滑条仍是相对百分比），
+--       只在真正 SetScale 时统一乘上这个系数，等价于把「原始大小」整体缩到 90%。
+-- 影响范围仅 OneBag 主框与其 bagFrame；OneBank / OneRing / OneView 各有独立 defaults 与缩放。
+local ONEBAG_BASE_SCALE = 0.9
+
 function OneCore:GetDefaults()
     if not self.defaults then
         self.defaults = {
@@ -2400,9 +2407,10 @@ function OneCore:GetFreshOptionsTable(module)
                         get = function() return self.db.profile.scale end, 
                         set = function(num) 
                             self.db.profile.scale = num
-                            self.frame:SetScale(num)
+                            local base = self.baseScale or 1
+                            self.frame:SetScale(num * base)
                             if self.frame.bagFrame then
-                                self.frame.bagFrame:SetScale(num)
+                                self.frame.bagFrame:SetScale(num * base)
                             end
                         end, 
                         min = .2, max = 2, isPercent = true,
@@ -3098,8 +3106,12 @@ function module:OrganizeFrame(needs)
     end
 end
 
+-- 边框默认白色（2026.11.10）：原来 SetBorderColor 每次调用都新建 {r=1,g=1,b=1}，
+-- 一次开背包 = 80+ 个短命表全进 GC；做成模块级常量复用，语义不变（只被读取）。
+local ONE_BAG_BORDER_WHITE = {r = 1, g = 1, b = 1}
+
 function module:SetBorderColor(slot)
-    local color = {r = 1, g = 1, b = 1}
+    local color = ONE_BAG_BORDER_WHITE
     local bag = slot:GetParent()
     local special = false
     if bag.isAmmo then 
@@ -3766,24 +3778,25 @@ function module:UpdateUnusableItems(bag)
     if hasPending then ScheduleUnusableRetry() end
 end
 
--- 缓存在每次 UpdateBag 开始时清空（self._slotCache = nil），因此不会读取上次刷新的陈旧数据。
+-- 缓存在每次刷新开始时用「世代号 +1」整体作废（self._slotGen），因此不会读取上次刷新的陈旧数据。
+-- （2026.11.10 之前是 self._slotCache = nil，每次刷新重建上百个表，GC 停顿会砸在开背包那一帧上。）
 function module:GetSlotData(bag, slot)
     if not self._slotCache then self._slotCache = {} end
     local byBag = self._slotCache[bag]
     if not byBag then byBag = {}; self._slotCache[bag] = byBag end
     local d = byBag[slot]
-    if not d then
+    if not d then d = {}; byBag[slot] = d end
+    -- 世代号复用（2026.11.10）：原来每次刷新都把整个 _slotCache 置 nil，于是每次开背包
+    -- 都要重新建 ~86 个槽位表（每表 7 个字段）。开关几十次就是上千个表交给 GC，
+    -- GC 步进一旦落在开背包的帧上就是 40~50ms 的停顿（[ob hitch] 实测：卡 51ms 背包=打开）。
+    -- 改为整表复用 + 世代号：刷新只把字段重填进已有表，不再产生垃圾，语义与「置 nil」等价
+    -- （世代号一变，下一次访问必然重新取容器数据，不会读到陈旧值）。
+    local gen = self._slotGen or 0
+    if d._gen ~= gen then
         local texture, itemCount, locked, quality, readable, lootable = GetContainerItemInfo(bag, slot)
-        d = {
-            texture = texture,
-            itemCount = itemCount,
-            locked = locked,
-            quality = quality,
-            readable = readable,
-            lootable = lootable,
-            link = GetContainerItemLink(bag, slot),
-        }
-        byBag[slot] = d
+        d.texture, d.itemCount, d.locked, d.quality, d.readable, d.lootable = texture, itemCount, locked, quality, readable, lootable
+        d.link = GetContainerItemLink(bag, slot)
+        d._gen = gen
     end
     return d
 end
@@ -3798,6 +3811,8 @@ function OneBag_DebugUnusable(bag, slot)
     out("bag=" .. bag .. " slot=" .. slot)
     local mod = OneBag
     if not (mod and mod.frame and mod.frame.bags and mod.frame.bags[bag]) then out("x frame/bags[" .. bag .. "] 不存在") return end
+    -- 诊断要看实时容器数据：世代号 +1 强制下次 GetSlotData 重新取（不动缓存表结构）
+    mod._slotGen = (mod._slotGen or 0) + 1
     out("开关 unusableTint = " .. tostring(OneBag.db and OneBag.db.profile and OneBag.db.profile.unusableTint))
     local button = mod.frame.bags[bag][slot]
     out("button = " .. (button and "存在(" .. tostring(button:GetName()) .. ")" or "nil"))
@@ -3843,8 +3858,10 @@ function module:UpdateBagSlots(bag)
     if not self.frame:IsVisible() then return end
     local bagFrame = self.frame.bags[bag]
     if not bagFrame or not bagFrame.size or bagFrame.size == 0 then return end
-    -- 丢弃上次刷新残留的槽位缓存：物品已经换过位置，旧数据会让边框染错色
-    self._slotCache = nil
+    -- 作废上次刷新的槽位缓存：物品已经换过位置，旧数据会让边框染错色。
+    -- 2026.11.10 起用「世代号 +1」代替置 nil（表结构复用，不再每次重建 ~86 个表交给 GC，
+    -- 见 GetSlotData 注释）；失效语义不变：世代号一变，下次访问必然重新取容器数据。
+    self._slotGen = (self._slotGen or 0) + 1
     -- 先把本包所有槽位数据一次性灌进 _slotCache（每格 1 次 GetContainerItemInfo + 1 次 GetContainerItemLink）。
     -- 下面的循环以及 SetBorderColor 内部的 GetSlotData 都会命中缓存，
     -- 避免"图标刷新取一遍 + SetBorderColor 再取一遍"的 2N 次容器 API。
@@ -3966,7 +3983,8 @@ end
 function module:UpdateBag(bag, skipCounts)
     if self.frame.isMoving or self.frame.isSorting or self.frame.isOutfitSwapping then return end
     if not self.frame.bags[bag] or not self.frame.bags[bag]:IsVisible() then return end
-    self._slotCache = nil  -- 清空单次刷新内的槽位缓存，避免读取上次刷新的陈旧数据
+    -- 作废单次刷新内的槽位缓存（世代号 +1，表结构复用；见 GetSlotData 注释）
+    self._slotGen = (self._slotGen or 0) + 1
     self:BuildFrame()
     self:OrganizeFrame()
     if not self.frame.bags[bag].colorLocked then
@@ -4509,7 +4527,7 @@ function module:OnBaseShow()
     -- 在 pfUI 这类大 UI 下是打开瞬间最不该付的开销。
     if self._baseScale ~= profile.scale then
         self._baseScale = profile.scale
-        frame:SetScale(profile.scale)
+        frame:SetScale(profile.scale * (self.baseScale or 1))
     end
     if self._baseAlpha ~= profile.alpha then
         self._baseAlpha = profile.alpha
@@ -4534,7 +4552,113 @@ function module:OnBaseShow()
     end
 end
 
+-- ===== PERF-PROBE-BEGIN =====
+-- 开/关背包的分段耗时探针 + 整帧卡顿尺（默认关闭，零开销；/obperf 开关；打包前整段删）
+-- 用法：/obperf → 按 B 开关背包若干次，聊天框会出现：
+--   [ob perf] 开 基框 0ms  自定义 0ms  建格 1ms  排布 0ms  刷包 2ms  计数 0ms  分类标签 0ms  总 3ms
+--   [ob hitch] 卡 46ms  背包=关闭  距上次打开=12000ms  最近: 刷包
+-- 判读：`[ob perf]` 只量 Lua；`[ob hitch]` 量真实掉帧（引擎侧也算，阈值 12ms = 141fps 下丢 1 帧）。
+--   两者对不上（Lua 0~3ms 但 hitch 40ms+）= 卡在引擎建资源/提交几何，只能靠预热挪走，
+--   这正是 2026.10.28/10.29 那轮得出的结论（Lua 2.5ms vs 帧间隙 52~78ms）。
+OBPERF = { on = 0 }
+function OBPERF_Start()
+	if OBPERF.on ~= 1 then return end
+	local now = GetTime()
+	OBPERF.t0 = now
+	OBPERF.last = now
+	OBPERF.buf = ""
+end
+function OBPERF_Mark(label)
+	if OBPERF.on ~= 1 then return end
+	OBPERF.lastLabel = label
+	if not OBPERF.t0 then return end
+	local now = GetTime()
+	OBPERF.buf = OBPERF.buf..label.." "..math.floor((now - OBPERF.last) * 1000).."ms  "
+	OBPERF.last = now
+end
+function OBPERF_End(tag)
+	if OBPERF.on ~= 1 or not OBPERF.t0 then return end
+	local now = GetTime()
+	OBPERF.lastOpenAt = now
+	DEFAULT_CHAT_FRAME:AddMessage("|cff00ffff[ob perf]|r "..tostring(tag or "")..OBPERF.buf..
+		"|cffffd200总 "..math.floor((now - OBPERF.t0) * 1000).."ms|r")
+	OBPERF.t0 = nil
+end
+OBPERF.hitchFrame = CreateFrame("Frame")
+OBPERF.hitchFrame:SetWidth(1)
+OBPERF.hitchFrame:SetHeight(1)
+OBPERF.hitchFrame:SetPoint("BOTTOMLEFT", "UIParent", "BOTTOMLEFT", 0, 0)
+function OBPERF_MemKB()
+	local f = collectgarbage
+	if type(f) ~= "function" then return 0 end
+	local ok, v = pcall(f, "count")
+	if ok and type(v) == "number" then return v end
+	return 0
+end
+function OBPERF_HitchTick()
+	if OBPERF.on ~= 1 then return end
+	local now = GetTime()
+	local mem = OBPERF_MemKB()
+	if OBPERF.prevFrame then
+		local dt = now - OBPERF.prevFrame
+		if dt >= 0.012 then
+			local bag = "关闭"
+			if OneBag and OneBag.frame and OneBag.frame:IsVisible() then
+				bag = "|cffff8888打开|r"
+			end
+			local sinceOpen = "-"
+			if OBPERF.lastOpenAt then
+				sinceOpen = math.floor((now - OBPERF.lastOpenAt) * 1000).."ms"
+			end
+			-- 内存变化：卡顿瞬间如果内存明显回落，基本就是 Lua GC 跑了一次整收集
+			local memTxt = ""
+			if OBPERF.prevMem then
+				local dmem = math.floor(OBPERF.prevMem - mem)
+				if dmem > 0 then
+					memTxt = "  内存回落 "..dmem.."KB(GC嫌疑)"
+				elseif dmem < 0 then
+					memTxt = "  内存增 "..(-dmem).."KB"
+				else
+					memTxt = "  内存不变"
+				end
+			end
+			DEFAULT_CHAT_FRAME:AddMessage("|cffff5555[ob hitch]|r 卡 "..
+				math.floor(dt * 1000).."ms  |cffaaaaaa背包="..bag..
+				"  距上次打开="..sinceOpen.."  最近: "..tostring(OBPERF.lastLabel or "-")..memTxt.."|r")
+		end
+	end
+	OBPERF.prevFrame = now
+	OBPERF.prevMem = mem
+end
+function OBPERF_SetHitch(on)
+	if not OBPERF.hitchFrame then return end
+	if on == 1 then
+		OBPERF.prevFrame = nil
+		OBPERF.prevMem = nil
+		OBPERF.lastLabel = nil
+		OBPERF.hitchFrame:SetScript("OnUpdate", OBPERF_HitchTick)
+		OBPERF.hitchFrame:Show()
+	else
+		OBPERF.hitchFrame:SetScript("OnUpdate", nil)
+		OBPERF.hitchFrame:Hide()
+	end
+end
+SLASH_ONEBAG_PERF1 = "/obperf"
+SlashCmdList["ONEBAG_PERF"] = function()
+	if OBPERF.on == 1 then
+		OBPERF.on = 0
+		OBPERF_SetHitch(0)
+		print("OneBag 性能探针 已关闭")
+	else
+		OBPERF.on = 1
+		OBPERF_SetHitch(1)
+		print("OneBag 性能探针 已开启：按 B 开关背包；任何 >12ms 的掉帧（141fps 下丢 1 帧）会打 [ob hitch]")
+	end
+end
+-- ===== PERF-PROBE-END =====
+
 function module:OnShow()
+    OBPERF_Start()
     -- 玩家手动打开过就等于"真画过了"，登录后的预热不必再跑一次；
     -- 若预热正进行中（0.35s 窗口内）被玩家打断，标记一下别把刚开的背包关掉
     if not self._warming then
@@ -4542,6 +4666,7 @@ function module:OnShow()
         self._warmupAborted = true
     end
     self:OnBaseShow()
+    OBPERF_Mark("基框")
     self:OnCustomShow()
     -- 预热期间不播开关背包音效（否则登录后突然"哗"一声）
     if not self._warming then PlaySound("igBackPackOpen") end
@@ -4552,12 +4677,15 @@ function module:OnShow()
     end
     self:BuildFrame()
     self:OrganizeFrame()
+    OBPERF_Mark("建格排布")
     -- 循环内跳过信息区计数，末尾只跑一次全包扫描：原来 5 个包 = 5 次全包扫描（约数百次容器 API），其中 4 次白跑
     for k, i in self.fBags do self:UpdateBag(i, true) end
     if self.frame.bags[-1] and (not self.frame.bags[-1].colorLocked) then
         for k, v in ipairs(self.frame.bags[-1]) do self:SetBorderColor(v) end
     end
+    OBPERF_Mark("刷包")
     self:DoSlotCounts()
+    OBPERF_Mark("计数")
 
     if self.frame.searchFrame then
         self.frame.searchFrame.edit:SetText(L["Search"])
@@ -4593,6 +4721,8 @@ function module:OnShow()
         end
         -- Quality模块不做处理
     end
+    OBPERF_Mark("分类标签")
+    OBPERF_End("开 ")
 end
 
 function module:OnCustomShow() end
@@ -4604,6 +4734,7 @@ function module:OnBaseHide()
 end
 
 function module:OnHide()
+    OBPERF_Start()
     self:OnBaseHide()
     self:OnCustomHide()
     if not self._warming then PlaySound("igBackPackClose") end
@@ -4611,6 +4742,8 @@ function module:OnHide()
         self.frame.bagFrame:Hide()
         self.frame.bagFrame.wasShown = true
     end
+    OBPERF_Mark("关基框")
+    OBPERF_End("关 ")
 end
 
 function module:OnCustomHide() end
@@ -4770,6 +4903,13 @@ OneBag = OneCore:NewModule("OneBag", "AceEvent-2.0", "AceHook-2.0", "AceDebug-2.
 OneBank = OneCore:NewModule("OneBank", "AceEvent-2.0", "AceHook-2.0", "AceDebug-2.0", "AceConsole-2.0", "AceDB-2.0")
 OneRing = OneCore:NewModule("OneRing", "AceEvent-2.0", "AceHook-2.0", "AceDebug-2.0", "AceConsole-2.0", "AceDB-2.0")
 OneView = OneCore:NewModule("OneView", "AceEvent-2.0", "AceHook-2.0", "AceDebug-2.0", "AceConsole-2.0", "AceDB-2.0")
+
+-- 全套窗口统一整体缩放基准：设置里 100% 实际只有原来的 90%（不改存档里的 scale）
+-- 写在 module 实例上（不是 modulePrototype），OneBagButton 等不显示物品框的模块不受影响
+OneBag.baseScale  = ONEBAG_BASE_SCALE
+OneBank.baseScale = ONEBAG_BASE_SCALE
+OneRing.baseScale = ONEBAG_BASE_SCALE
+OneView.baseScale = ONEBAG_BASE_SCALE
 OneBagButton = OneCore:NewModule("OneBagButton", "AceEvent-2.0")
 
 -- 删除或注释掉文件开始部分的这个函数：
@@ -6057,6 +6197,31 @@ function OneView:OnInitialize()
         end)
     end
     
+    -- 背包区/银行区切换按钮：悬停提示（2026.11.11）
+    -- 这两个按钮切换 show.inventory / show.bank，但点击前后纹理完全一样，
+    -- 误触收起后界面少一半，而底部计数（96/112）照常算，很容易被当成「物品丢了」。
+    local invButton = getglobal("OneViewFrameInventoryButton")
+    local function OneView_SetupAreaHint(btn, key, title)
+        if not btn then return end
+        btn:SetScript("OnEnter", function()
+            if not GameTooltip then return end
+            GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
+            GameTooltip:AddLine(title)
+            local on = OneView.db and OneView.db.profile and OneView.db.profile.show[key]
+            if on then
+                GameTooltip:AddLine("当前：展开（左键点击收起）", 1, 1, 1)
+            else
+                GameTooltip:AddLine("当前：已收起（左键点击展开）", 1, 0.35, 0.35)
+            end
+            GameTooltip:Show()
+        end)
+        btn:SetScript("OnLeave", function()
+            if GameTooltip then GameTooltip:Hide() end
+        end)
+    end
+    OneView_SetupAreaHint(invButton, "inventory", "背包区")
+    OneView_SetupAreaHint(bankButton, "bank", "银行区")
+
     -- 嵌入分类和品质模块
     OneViewCategory:Embed(self)
     OneViewQuality:Embed(self)
@@ -6276,9 +6441,13 @@ function OneView:OrganizeFrame(needs)
                 invButton:ClearAllPoints()
                 invButton:SetPoint("BOTTOMLEFT", self.frame.bags[0][1]:GetName(), "TOPLEFT", -5, 0)
             else
+                -- 收起态：标题+图标放在「银行区下面一行」，而不是框体左下角。
+                -- 原来锚在 BOTTOMLEFT 24（框底往上 24），框高只有 ~215 时它会掉到
+                -- 面板外面、浮在游戏画面上，看起来像界面坏了 / 东西丢了（2026.11.11）
                 local invButton = getglobal(self.frame:GetName() .. "InventoryButton")
                 invButton:ClearAllPoints()
-                invButton:SetPoint("BOTTOMLEFT", self.frame:GetName(), "BOTTOMLEFT", 3, 24)
+                invButton:SetPoint("TOPLEFT", self.frame:GetName(), "TOPLEFT",
+                    self.leftBorder - 5, 0 - self.topBorder - (self.rowHeight * (curRow - 1)))
             end
         end
     end
@@ -6305,8 +6474,20 @@ function OneView:OrganizeFrame(needs)
     OneViewFrameBankName:SetPoint("LEFT", OneViewFrameBankButton, "RIGHT", 5, 1)
     local bankBagsText = self.LV and self.LV["%s's Bank Bags"] or self.L and self.L["%s's Bank Bags"] or "%s's Bank Bags"
     local bagsText = self.LV and self.LV["%s's Bags"] or self.L and self.L["%s's Bags"] or "%s's Bags"
-    OneViewFrameBankName:SetText(format(bankBagsText, self.charId or ""))
-    OneViewFrameInventoryName:SetText(format(bagsText, self.charId or ""))
+    local bankName, invName = format(bankBagsText, self.charId or ""), format(bagsText, self.charId or "")
+    -- 收起态直接在标题里写明，避免再被误判成「东西丢了」（2026.11.11）
+    -- 注意：不能走 AceLocale 查表，未注册的键在非 silent 实例上会直接抛
+    -- "Translation for ... not found"（22:01 实测），所以用字面量
+    local hint = "（已收起 · 点左侧图标展开）"
+    if not self.db.profile.show.bank then bankName = bankName .. "  " .. hint end
+    if not self.db.profile.show.inventory then invName = invName .. "  " .. hint end
+    OneViewFrameBankName:SetText(bankName)
+    OneViewFrameInventoryName:SetText(invName)
+    -- 收起的那一半把切换按钮压暗，给出可见反馈（2026.11.11）
+    local invBtn = getglobal(self.frame:GetName() .. "InventoryButton")
+    local bnkBtn = getglobal(self.frame:GetName() .. "BankButton")
+    if invBtn then invBtn:SetAlpha(self.db.profile.show.inventory and 1 or 0.4) end
+    if bnkBtn then bnkBtn:SetAlpha(self.db.profile.show.bank and 1 or 0.4) end
 end
 
 function OneView:FillBags()
@@ -6362,13 +6543,48 @@ function OneView:FillBags()
         end
         local bagSlot = getglobal("OneViewFrameBag" .. bag)
         if bagSlot then 
-            local itemId = self.storage:BagInfo(self.faction, self.charId, bag)
-            if itemId then 
-                local itemName, itemLink, itemQuality, itemLevel, itemType, itemSubType, itemCount, itemEquipLoc, itemTexture = GetItemInfo(itemId)
-                getglobal(bagSlot:GetName() .. "IconTexture"):SetTexture(itemTexture)
+            local itemId, size = self.storage:BagInfo(self.faction, self.charId, bag)
+            local showDefault = false
+            -- 存档里存的不是纯数字 id，而是完整物品码 "item:61196:0:0:0"（OneStorage 的形态）。
+            -- tonumber("item:61196:0:0:0") = nil，之前一直走「默认图案」分支 →
+            -- 离线银行里背包/银行包全变成统一图案。这里统一抽出数字 id 再喂 GetItemInfo。（2026.11.16）
+            local numId
+            if type(itemId) == "number" then
+                numId = itemId
+            elseif type(itemId) == "string" then
+                local _, _, cap = strfind(itemId, "item:(%d+)")
+                numId = tonumber(cap) or tonumber(itemId)
+            end
+            if numId then
+                local itemName, itemLink, itemQuality, itemLevel, itemType, itemSubType, itemCount, itemEquipLoc, itemTexture = GetItemInfo(numId)
+                -- 只有确实是容器类才用它的真实图标，否则回退默认背包图。
+                -- 注意：GetItemInfo 第 5 个是**大类**（中文客户端返回「容器」Container），
+                -- 第 6 个才是子类（「背包」/「灵魂袋」/「草药包」…），两个都要认；
+                -- 否则真背包也会被误判成非容器、退回默认图（2026.11.16）
+                local isContainer =
+                    itemType == "容器" or itemType == "Container" or itemType == "背包"
+                    or itemSubType == "背包" or itemSubType == "灵魂袋" or itemSubType == "草药包"
+                    or itemSubType == "附魔包" or itemSubType == "工程包"
+                    or itemSubType == "箭袋" or itemSubType == "弹药袋"
+                    or itemSubType == "Bag" or itemSubType == "Soul Bag" or itemSubType == "Herb Bag"
+                    or itemSubType == "Enchanting Bag" or itemSubType == "Engineering Bag"
+                    or itemSubType == "Quiver" or itemSubType == "Ammo Pouch"
+                if isContainer and itemTexture then
+                    getglobal(bagSlot:GetName() .. "IconTexture"):SetTexture(itemTexture)
+                    getglobal(bagSlot:GetName() .. "IconTexture"):Show()
+                    bagSlot.itemId = numId
+                else
+                    showDefault = true
+                end
+            elseif (tonumber(size) or 0) > 0 then
+                showDefault = true
+            end
+            if showDefault then
+                getglobal(bagSlot:GetName() .. "IconTexture"):SetTexture("Interface\\AddOns\\OneBag\\media\\bags.BLP")
                 getglobal(bagSlot:GetName() .. "IconTexture"):Show()
-                bagSlot.itemId = itemId
-            else
+                bagSlot.itemId = nil
+            end
+            if not numId and not showDefault then
                 getglobal(bagSlot:GetName() .. "IconTexture"):Hide()
                 bagSlot.itemId = nil
             end
@@ -6981,11 +7197,194 @@ function OneView:GetDefaults()
     return self.defaults
 end
 
+--=== 离线银行显示诊断（2026.11.11）：/ovdbg =========================
+-- 排查「银行格子有、背包格子整个不画」：一次列出每个容器的 size、
+-- 实际建出来的按钮数、真正 IsShown 的数量、父框可见性、首格锚点。
+function OneView:DebugDump()
+    local function out(msg) DEFAULT_CHAT_FRAME:AddMessage(msg) end
+    local p = self.db and self.db.profile
+    out("|cff00ffff[OV]|r faction="..tostring(self.faction).."  charId="..tostring(self.charId))
+    out("|cff00ffff[OV]|r show.bank="..tostring(p.show.bank).."  show.inventory="..tostring(p.show.inventory)..
+        "  cols="..tostring(p.cols).."  frameH="..tostring(math.floor(self.frame:GetHeight() or 0))..
+        "  frameShown="..tostring(self.frame:IsShown()))
+    if not self.frame:IsShown() then
+        out("|cffffd200[OV]|r 框体当前是关的（frameShown=nil），下面的 shown 只是按钮自己的开关位，"..
+            "不代表画面。要看真显示效果：先 /ovshow")
+    end
+    for b = -1, 10 do
+        local cb = self.frame.bags[b]
+        if cb then
+            local created, shown, vis = 0, 0, 0
+            for i = 1, 64 do
+                local btn = cb[i]
+                if btn then
+                    created = created + 1
+                    if btn:IsShown() then shown = shown + 1 end
+                    if btn:IsVisible() then vis = vis + 1 end
+                end
+            end
+            local pt, pos = "nil", ""
+            local first = cb[1]
+            if first then
+                local p1, p2, p3, p4, p5 = first:GetPoint(1)
+                if p1 then pt = tostring(p1).."/"..tostring(p3 or "?").." "..tostring(p4 or "?")..","..tostring(p5 or "?") end
+                local l, t = first:GetLeft(), first:GetTop()
+                if l and t then pos = "  abs="..tostring(math.floor(l))..","..tostring(math.floor(t)) end
+            end
+            out("|cffaaaaaa[OV]|r bag="..b.."  size="..tostring(cb.size).."  created="..created..
+                "  shown="..shown.."  vis="..vis.."  parentShown="..tostring(cb:IsShown())..
+                "  parentAlpha="..tostring(cb:GetAlpha()).."  first="..pt..pos..
+                "  alpha="..tostring(first and first:GetAlpha() or "-"))
+        end
+    end
+end
+SLASH_ONEVIEW_DEBUG1 = "/ovdbg"
+SlashCmdList["ONEVIEW_DEBUG"] = function()
+    if OneView and OneView.DebugDump then
+        OneView:DebugDump()
+    else
+        DEFAULT_CHAT_FRAME:AddMessage("|cffff5555[OV]|r OneView 未加载")
+    end
+end
+
+-- /ovshow：先打开框体（触发 OnShow → LoadCharacter → OrganizeFrame → FillBags），
+-- 0.3 秒后再 dump，这样拿到的是「画面上真显示着」的状态（2026.11.11）
+SLASH_ONEVIEW_SHOWDUMP1 = "/ovshow"
+SlashCmdList["ONEVIEW_SHOWDUMP"] = function()
+    if not (OneView and OneView.frame) then
+        DEFAULT_CHAT_FRAME:AddMessage("|cffff5555[OV]|r OneView 未加载")
+        return
+    end
+    OneView.frame:Show()
+    if ScheduleTimer then
+        ScheduleTimer(0.3, function() OneView:DebugDump() end)
+    else
+        OneView:DebugDump()
+    end
+end
+
+-- /ovbag /ovbank：键盘切换两个区块，省得去点那个容易误触的图标（2026.11.11）
+local function OneViewToggleSection(key, label)
+    if not (OneView and OneView.db and OneView.db.profile) then
+        DEFAULT_CHAT_FRAME:AddMessage("|cffff5555[OV]|r OneView 未加载")
+        return
+    end
+    local show = OneView.db.profile.show
+    show[key] = not show[key]
+    OneView:OrganizeFrame()
+    DEFAULT_CHAT_FRAME:AddMessage("|cff00ffff[OV]|r "..label..(show[key] and "：已展开" or "：已收起"))
+end
+SLASH_ONEVIEW_TOGGLEBAG1 = "/ovbag"
+SlashCmdList["ONEVIEW_TOGGLEBAG"] = function() OneViewToggleSection("inventory", "背包区") end
+SLASH_ONEVIEW_TOGGLEBANK1 = "/ovbank"
+SlashCmdList["ONEVIEW_TOGGLEBANK"] = function() OneViewToggleSection("bank", "银行区") end
+
+-- /ovbb：打印背包（1~4）与银行包（5~10）的「装备槽映射 + 存档值」对照（2026.11.11）
+-- 用于定位「背包图标变装备图标」「银行包离线不显示」——把 ContainerIDToInventoryID 的
+-- 权威返回值、bag+19/bag+59 的旧偏移、以及存档里实际存的值并排打出来。
+SLASH_ONEVIEW_BANKBAGS1 = "/ovbb"
+SlashCmdList["ONEVIEW_BANKBAGS"] = function()
+    local function out(m) DEFAULT_CHAT_FRAME:AddMessage(m) end
+    if not (OneView and OneView.storage) then out("|cffff5555[OV]|r OneView 未加载"); return end
+    local S = OneView.storage
+    local ok, err = pcall(function()
+        for b = 1, 10 do
+            local size = GetContainerNumSlots(b) or 0
+            local slotApi = ContainerIDToInventoryID and ContainerIDToInventoryID(b) or -1
+            local slotOld = (b < 5) and (b + 19) or (b + 59)
+            local lApi = GetInventoryItemLink("player", slotApi)
+            local lOld = GetInventoryItemLink("player", slotOld)
+            -- strfind 返回的是 (起始位置, 结束位置, 捕获)，只接第一个拿到的是数字位置而不是 id（2026.11.16 修正）
+            local idApi, idOld
+            if lApi then local _, _, cap = strfind(lApi, "item:(%d+)"); idApi = cap end
+            if lOld then local _, _, cap = strfind(lOld, "item:(%d+)"); idOld = cap end
+            local itemId, savedSize = S:BagInfo(OneView.faction, OneView.charId, b)
+            local iType, iSub = "?", "?"
+            if itemId and tostring(itemId) ~= "nil" then
+                local _, _, _, _, t, st = GetItemInfo(itemId)
+                iType, iSub = tostring(t), tostring(st)
+            end
+            out("|cffaaaaaa[OV]|r 包"..b.." 格数="..size..
+                " 槽API="..tostring(slotApi).."="..(idApi or "空")..
+                " 槽旧="..tostring(slotOld).."="..(idOld or "空")..
+                " 存档="..(itemId and (tostring(itemId).."/"..tostring(savedSize).."("..iType.."/"..iSub..")") or "无"))
+        end
+        out("|cffffd200[OV]|r 判读：槽 20~23 = 背包1~4、64~69 = 银行包（需开银行），原生本来就有效")
+        out("|cffffd200[OV]|r 存档类型应为 背包/箭袋/灵魂袋；若是 护甲/武器 说明有插件改了 GetInventoryItemLink")
+        out("|cffffd200[OV]|r 2026.11.16 已定位：旧版 Tmog 守卫把 20→5(胸)/21→16(主手)/22,23→17 错译，已改回直通")
+    end)
+    if not ok then out("|cffff5555[OV]|r /ovbb 出错："..tostring(err)) end
+end
+
+-- /ovslots：遍历装备槽 0~30，打印每个槽的物品 id + 类型。
+-- 用途：确认 1.12 客户端的槽位布局。实测（2026.11.16）：槽 20~23 = 背包1~4、
+-- 槽 64~69 = 银行包（需开银行才有值）、24/25/26 = Invalid inventory slot。
+SLASH_ONEVIEW_SLOTS1 = "/ovslots"
+SlashCmdList["ONEVIEW_SLOTS"] = function()
+    local function out(m) DEFAULT_CHAT_FRAME:AddMessage(m) end
+    local ok, err = pcall(function()
+        for i = 0, 30 do
+            local link = GetInventoryItemLink("player", i)
+            if link then
+                local _, _, id = strfind(link, "item:(%d+)")
+                local _, _, _, _, t, st = GetItemInfo(id)
+                out("|cffaaaaaa[OV]|r 槽"..i.." = "..tostring(id).." ("..tostring(t).."/"..tostring(st)..")")
+            end
+        end
+    end)
+    if not ok then out("|cffff5555[OV]|r /ovslots 出错："..tostring(err)) end
+end
+
+-- /ovbagicon：测试 vanilla 1.12 上取「包本身图标」的所有可能途径，回答「能不能显示真实背包图标」
+SLASH_ONEVIEW_BAGICON1 = "/ovbagicon"
+SlashCmdList["ONEVIEW_BAGICON"] = function()
+    local function out(m) DEFAULT_CHAT_FRAME:AddMessage(m) end
+    local ok, err = pcall(function()
+        for b = 0, 4 do
+            local num = GetContainerNumSlots(b) or 0
+            local parts = {"包"..b.."(格数"..num..")"}
+            -- 途径1：GetContainerItemLink(bag, 0) —— 第0槽是否是包本身？
+            if GetContainerItemLink then
+                local l0 = GetContainerItemLink(b, 0)
+                if l0 then
+                    local _,_,id = strfind(l0, "item:(%d+)")
+                    local n = id and (select(1, GetItemInfo(id))) or "?"
+                    local _,_,_,_,t = id and GetItemInfo(id) or nil
+                    table.insert(parts, "link0="..tostring(id).."("..tostring(t)..")")
+                else
+                    table.insert(parts, "link0=空")
+                end
+            end
+            -- 途径2：GetContainerItemInfo(bag, 0) —— 打印实际纹理路径
+            if GetContainerItemInfo then
+                local tex = GetContainerItemInfo(b, 0)
+                table.insert(parts, "info0="..(tex and tostring(tex) or "空"))
+            end
+            out("|cffaaaaaa[OV]|r "..table.concat(parts, " "))
+        end
+        out("|cffffd200[OV]|r 若 link0/info0 能取到包本身，说明可显示真实图标；否则 1.12 确实取不到")
+    end)
+    if not ok then out("|cffff5555[OV]|r /ovbagicon 出错："..tostring(err)) end
+end
+
+-- /ovrb：按当前存档重建 OneView（补建之前 size=0 时没建出来的格子）
+SLASH_ONEVIEW_REBUILD1 = "/ovrb"
+SlashCmdList["ONEVIEW_REBUILD"] = function()
+    if not OneView then return end
+    local ok, err = pcall(function()
+        OneView:BuildFrame()
+        OneView:OrganizeFrame()
+        OneView:FillBags()
+    end)
+    DEFAULT_CHAT_FRAME:AddMessage(ok and "|cff00ff00[OV]|r 已按当前存档重建" or ("|cffff5555[OV]|r 重建失败："..tostring(err)))
+end
+
 -- 文件末尾添加使用说明
 local function PrintHelp()
     DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00[OneBag] 分类过滤模块控制命令:|r")
     DEFAULT_CHAT_FRAME:AddMessage("|cFFFFFF00/obtogglefilters 或 /obtf - 切换过滤模块的显示/隐藏|r")
     DEFAULT_CHAT_FRAME:AddMessage("|cFFFFFF00在插件设置菜单中也可以找到此选项|r")
+    DEFAULT_CHAT_FRAME:AddMessage("|cFFFFFF00/obperf - 开关「开/关背包」分段耗时探针与掉帧尺（排查卡顿用）|r")
 end
 
 -- 注册帮助命令
